@@ -22,6 +22,18 @@ pub struct Model {
 }
 
 impl Model {
+    fn scalar_i32(array: &Array) -> Result<i32, Exception> {
+        let value = array.as_dtype(Dtype::Int32)?;
+        value.eval()?;
+        Ok(value.item::<i32>())
+    }
+
+    fn vec_i32(array: &Array) -> Result<Vec<i32>, Exception> {
+        let value = array.as_dtype(Dtype::Int32)?;
+        value.eval()?;
+        Ok(value.as_slice::<i32>().to_vec())
+    }
+
     pub fn load(model_dir: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let path = Path::new(model_dir);
         let config = load_full_config(path)?;
@@ -121,24 +133,29 @@ impl Model {
     ) -> Result<(Array, Array), Exception> {
         let batch_size = input_ids.shape()[0];
         let seq_length = input_ids.shape()[1];
+        let mut position_ids = ops::arange::<_, i32>(0, seq_length, None)?;
+        position_ids = position_ids.reshape(&[1, seq_length])?;
+        position_ids = ops::broadcast_to(&position_ids, &[batch_size, seq_length])?;
+
         let spatial_merge_size = self.config.vision_config.spatial_merge_size;
         let image_token_id = self.config.image_token_id;
         let video_token_id = self.config.video_token_id;
         let image_start_token_id = self.config.image_start_token_id;
 
         if image_grid_thw.is_some() || video_grid_thw.is_some() {
+            let total_input_ids = input_ids;
             let attention_mask = match attention_mask {
                 Some(m) if m.shape().last().copied() == Some(seq_length) => m.clone(),
                 _ => ops::ones::<i32>(&[batch_size, seq_length])?,
             };
 
-            let mut position_ids = ops::ones::<i32>(&[3, batch_size, seq_length])?;
+            position_ids = ops::ones::<i32>(&[3, batch_size, seq_length])?;
             let mut image_index: usize = 0;
             let mut video_index: usize = 0;
             let mut mrope_position_deltas: Vec<i32> = Vec::new();
 
             for i in 0..batch_size {
-                let input_ids_i = input_ids.index(i);
+                let input_ids_i = total_input_ids.index(i);
                 let attn_mask_i = attention_mask.index(i);
                 let input_ids_masked = ops::which(
                     &attn_mask_i.eq(&Array::from_int(1))?,
@@ -146,28 +163,22 @@ impl Model {
                     &ops::zeros::<i32>(&[seq_length])?,
                 )?;
 
-                // Materialize tokens to CPU for iteration
-                input_ids_masked.eval()?;
-                let input_tokens: Vec<i32> = (0..seq_length as usize)
-                    .map(|j| {
-                        let v = input_ids_masked.index(j as i32);
-                        v.eval().unwrap();
-                        v.item::<i32>()
-                    })
-                    .collect();
+                let start_positions = ops::which(
+                    &input_ids_masked.eq(&Array::from_int(image_start_token_id))?,
+                    &ops::arange::<_, i32>(0, seq_length, None)?,
+                    &ops::zeros::<i32>(&[seq_length])?,
+                )?;
+                let vision_start_indices = ops::sum(&start_positions, None)?;
+                let vision_start_index = Self::scalar_i32(&vision_start_indices)?;
+                let vision_tokens = input_ids_masked.index(vision_start_index + 1);
+                let image_nums = Self::scalar_i32(
+                    &ops::sum(&vision_tokens.eq(&Array::from_int(image_token_id))?, None)?,
+                )?;
+                let video_nums = Self::scalar_i32(
+                    &ops::sum(&vision_tokens.eq(&Array::from_int(video_token_id))?, None)?,
+                )?;
 
-                // Count images and videos
-                let mut image_nums = 0i32;
-                let mut video_nums = 0i32;
-                for j in 0..input_tokens.len() {
-                    if input_tokens[j] == image_start_token_id && j + 1 < input_tokens.len() {
-                        if input_tokens[j + 1] == image_token_id {
-                            image_nums += 1;
-                        } else if input_tokens[j + 1] == video_token_id {
-                            video_nums += 1;
-                        }
-                    }
-                }
+                let input_tokens = Self::vec_i32(&input_ids_masked)?;
 
                 let mut llm_pos_ids_list: Vec<Array> = Vec::new();
                 let mut st: usize = 0;
@@ -216,21 +227,15 @@ impl Model {
                     let text_len = (ed - st) as i32;
                     let st_idx = if !llm_pos_ids_list.is_empty() {
                         let last = llm_pos_ids_list.last().unwrap();
-                        let max_val = ops::max(last, None)?;
-                        max_val.eval()?;
-                        let v: i32 = max_val.item();
-                        v + 1
+                        Self::scalar_i32(&ops::max(last, None)?)? + 1
                     } else {
                         0
                     };
 
-                    // Text positions before the image: [3, text_len]
-                    if text_len > 0 {
-                        let text_index = ops::arange::<_, i32>(0, text_len, None)?.reshape(&[1, text_len])?;
-                        let text_index = ops::broadcast_to(&text_index, &[3, text_len])?;
-                        let text_index = ops::add(&text_index, &Array::from_int(st_idx))?;
-                        llm_pos_ids_list.push(text_index);
-                    }
+                    let text_index = ops::arange::<_, i32>(0, text_len, None)?.reshape(&[1, text_len])?;
+                    let text_index = ops::broadcast_to(&text_index, &[3, text_len])?;
+                    let text_index = ops::add(&text_index, &Array::from_int(st_idx))?;
+                    llm_pos_ids_list.push(text_index);
 
                     // Vision positions: T/H/W grids
                     let num_patches = llm_grid_t * llm_grid_h * llm_grid_w;
@@ -258,14 +263,10 @@ impl Model {
                     st = ed + (num_patches as usize);
                 }
 
-                // Remaining text after last image
                 if st < input_tokens.len() {
                     let st_idx = if !llm_pos_ids_list.is_empty() {
                         let last = llm_pos_ids_list.last().unwrap();
-                        let max_val = ops::max(last, None)?;
-                        max_val.eval()?;
-                        let v: i32 = max_val.item();
-                        v + 1
+                        Self::scalar_i32(&ops::max(last, None)?)? + 1
                     } else {
                         0
                     };
@@ -276,12 +277,10 @@ impl Model {
                     llm_pos_ids_list.push(t_index);
                 }
 
-                // Concatenate all position segments
                 let refs: Vec<&Array> = llm_pos_ids_list.iter().collect();
                 let llm_positions = ops::concatenate_axis(&refs, 1)?
                     .reshape(&[3, -1])?;
 
-                // Apply attention mask
                 let mask_i = attention_mask.index(i).eq(&Array::from_int(1))?;
                 let expanded_mask = mask_i.reshape(&[1, 1, seq_length])?;
                 let expanded_mask = ops::broadcast_to(&expanded_mask, &[3, 1, seq_length])?;
@@ -290,7 +289,6 @@ impl Model {
                 let current_pos = position_ids.index((.., i..i+1, ..));
                 let new_positions = ops::which(&expanded_mask, &expanded_positions, &current_pos)?;
 
-                // Update position_ids for this batch item
                 if batch_size == 1 {
                     position_ids = new_positions;
                 } else {
@@ -300,31 +298,28 @@ impl Model {
                     position_ids = ops::concatenate_axis(&parts, 1)?;
                 }
 
-                // Compute delta
-                let max_pos = ops::max(&llm_positions, None)?;
-                max_pos.eval()?;
-                let max_pos_val: i32 = max_pos.item();
-                let delta = max_pos_val + 1 - input_tokens.len() as i32;
+                let max_pos_val = Self::scalar_i32(&ops::max(&llm_positions, None)?)?;
+                let total_len = total_input_ids.index(i).shape()[0];
+                let delta = max_pos_val + 1 - total_len;
                 mrope_position_deltas.push(delta);
             }
 
-            let delta_arr = Array::from_int(mrope_position_deltas[0]);
+            let delta_arr = Array::from_slice(&mrope_position_deltas, &[mrope_position_deltas.len() as i32]);
+            let delta_arr = delta_arr.index(0);
             Ok((position_ids, delta_arr))
         } else {
-            // No vision tokens — simple sequential positions
             if let Some(attn_mask) = attention_mask {
                 let cumsum = ops::cumsum(&attn_mask.as_dtype(Dtype::Int64)?, Some(-1), None, None)?;
                 let ones = Array::from_int(1);
                 let pos = ops::subtract(&cumsum, &ones)?;
                 let zero_mask = attn_mask.eq(&Array::from_int(0))?;
                 let pos = ops::which(&zero_mask, &ops::ones::<i32>(&pos.shape())?, &pos)?;
-                let pos_slice = pos.index(0); // take first batch item
+                let pos_slice = pos.index(0);
                 let pos_reshaped = pos_slice.reshape(&[1, 1, -1])?;
                 let pos = ops::broadcast_to(&pos_reshaped, &[3, batch_size, seq_length])?;
 
                 let max_pos = ops::max(&pos.index((0, 0, ..)), None)?;
-                max_pos.eval()?;
-                let max_val: i32 = max_pos.item();
+                let max_val = Self::scalar_i32(&max_pos)?;
                 let delta = max_val + 1 - seq_length;
                 Ok((pos, Array::from_int(delta)))
             } else {

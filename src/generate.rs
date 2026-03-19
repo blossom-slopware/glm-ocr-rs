@@ -1,8 +1,9 @@
-use mlx_rs::{error::Exception, Array, Dtype};
+use mlx_rs::{error::Exception, Array};
 use mlx_rs::ops::{self, indexing::IndexOp};
-use mlx_lm::cache::{ConcatKeyValueCache, KeyValueCache};
+use mlx_lm::cache::KeyValueCache;
 
 use crate::full_model::Model;
+use crate::ocr::abort::AbortSignal;
 use crate::sampler;
 
 /// Configuration for text generation.
@@ -38,6 +39,34 @@ impl Default for GenerateConfig {
 pub struct GenerateStepResult {
     pub token_id: i32,
     pub logprobs: Array,
+}
+
+/// Summary of a generation run.
+pub struct GenerateSummary {
+    pub generated_tokens: usize,
+    pub stopped_by_stop_token: bool,
+}
+
+/// Error type for generation — supports abort and MLX errors.
+#[derive(Debug)]
+pub enum GenerateError {
+    Aborted,
+    Mlx(Exception),
+}
+
+impl From<Exception> for GenerateError {
+    fn from(e: Exception) -> Self {
+        GenerateError::Mlx(e)
+    }
+}
+
+impl std::fmt::Display for GenerateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GenerateError::Aborted => write!(f, "Generation aborted"),
+            GenerateError::Mlx(e) => write!(f, "MLX error: {}", e),
+        }
+    }
 }
 
 /// Internal step: takes logits, applies processors, samples token.
@@ -79,16 +108,22 @@ fn step(
     Ok((y, logprobs))
 }
 
-/// Run generation: prefill + decode loop.
-/// Returns a vector of generated token IDs.
-pub fn generate(
+/// Run generation incrementally: prefill + decode loop.
+/// Calls `on_token` for each sampled token as soon as it is available.
+/// The callback can return `Err(GenerateError::Aborted)` to stop generation.
+pub fn generate_stream<F>(
     model: &mut Model,
     input_ids: &Array,               // [1, seq_len]
     pixel_values: Option<&Array>,     // [N, C*T*H*W]
     image_grid_thw: Option<&[(i32, i32, i32)]>,
     mask: Option<&Array>,
     config: &GenerateConfig,
-) -> Result<Vec<i32>, Exception> {
+    abort: &AbortSignal,
+    mut on_token: F,
+) -> Result<GenerateSummary, GenerateError>
+where
+    F: FnMut(i32) -> Result<(), GenerateError>,
+{
     let mut cache = model.new_cache();
     let mut generated_tokens: Vec<i32> = Vec::new();
 
@@ -101,6 +136,10 @@ pub fn generate(
     let mut processed = 0i32;
 
     while processed < seq_len - 1 {
+        if abort.is_set() {
+            return Err(GenerateError::Aborted);
+        }
+
         let chunk_end = std::cmp::min(processed + config.prefill_step_size, seq_len - 1);
         let chunk_embeds = inputs_embeds.index((.., processed..chunk_end, ..));
         let chunk_pos = position_ids.index((.., .., processed..chunk_end));
@@ -126,21 +165,37 @@ pub fn generate(
         }
     }
 
-    let (mut y, mut _logprobs) = step(&logits, &generated_tokens, config)?;
+    if config.max_tokens == 0 {
+        return Ok(GenerateSummary {
+            generated_tokens: 0,
+            stopped_by_stop_token: false,
+        });
+    }
+
+    let (y, mut _logprobs) = step(&logits, &generated_tokens, config)?;
     y.eval()?;
     let token_id: i32 = y.item();
     generated_tokens.push(token_id);
+    on_token(token_id)?;
 
-    if config.stop_tokens.contains(&token_id) {
-        return Ok(vec![token_id]);
+    let mut emitted_tokens = 1usize;
+    let mut stopped_by_stop_token = config.stop_tokens.contains(&token_id);
+
+    if stopped_by_stop_token {
+        return Ok(GenerateSummary {
+            generated_tokens: emitted_tokens,
+            stopped_by_stop_token,
+        });
     }
-
-    let mut result_tokens = vec![token_id];
 
     // Phase 3: Decode loop
     for _ in 1..config.max_tokens {
+        if abort.is_set() {
+            return Err(GenerateError::Aborted);
+        }
+
         let cache_offset = cache[0].as_ref().map(|c| c.offset()).unwrap_or(0);
-        let current_token = *result_tokens.last().unwrap();
+        let current_token = *generated_tokens.last().unwrap();
 
         // Build token input [1, 1]
         let y_input = Array::from_int(current_token).reshape(&[1, 1])?;
@@ -152,12 +207,41 @@ pub fn generate(
         let next_token_id: i32 = next_y.item();
 
         generated_tokens.push(next_token_id);
-        result_tokens.push(next_token_id);
+        on_token(next_token_id)?;
+        emitted_tokens += 1;
 
         if config.stop_tokens.contains(&next_token_id) {
+            stopped_by_stop_token = true;
             break;
         }
     }
 
+    Ok(GenerateSummary {
+        generated_tokens: emitted_tokens,
+        stopped_by_stop_token,
+    })
+}
+
+/// Run generation: prefill + decode loop.
+/// Returns a vector of generated token IDs.
+pub fn generate(
+    model: &mut Model,
+    input_ids: &Array,               // [1, seq_len]
+    pixel_values: Option<&Array>,     // [N, C*T*H*W]
+    image_grid_thw: Option<&[(i32, i32, i32)]>,
+    mask: Option<&Array>,
+    config: &GenerateConfig,
+) -> Result<Vec<i32>, GenerateError> {
+    let mut result_tokens = Vec::new();
+    generate_stream(
+        model,
+        input_ids,
+        pixel_values,
+        image_grid_thw,
+        mask,
+        config,
+        &AbortSignal::none(),
+        |token_id| { result_tokens.push(token_id); Ok(()) },
+    )?;
     Ok(result_tokens)
 }

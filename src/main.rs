@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use mlx_ocr_2::full_model::Model;
 use mlx_ocr_2::image_processor::ImageProcessor;
+use mlx_ocr_2::ocr::{OcrEngine, OcrService};
 use mlx_ocr_2::server::{build_router, AppState};
 use mlx_ocr_2::tokenizer::GlmTokenizer;
 
@@ -69,11 +70,16 @@ async fn main() {
 
     let model_name = args.model_dir.clone();
 
-    let state = Arc::new(AppState {
-        model: tokio::sync::Mutex::new(model),
+    let engine = OcrEngine {
+        model,
         tokenizer,
         image_processor,
         template_str,
+    };
+    let service = OcrService::new(engine);
+
+    let state = Arc::new(AppState {
+        service,
         model_name,
     });
 
