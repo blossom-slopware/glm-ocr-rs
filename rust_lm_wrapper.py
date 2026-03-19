@@ -1,4 +1,4 @@
-"""Drop-in replacement for LanguageModel backed by Rust PyGlmOcrModel."""
+"""Drop-in replacement for LanguageModel backed by Rust PyFullModel."""
 
 import numpy as np
 import mlx.core as mx
