@@ -1,4 +1,4 @@
-"""Launch mlx_vlm server with Rust language model."""
+"""Launch mlx_vlm server with Rust full model."""
 
 import sys
 import os
@@ -20,14 +20,14 @@ _original_load = server.load_model_resources
 def _patched_load(model_path, adapter_path):
     model, processor, config = _original_load(model_path, adapter_path)
 
-    print("Loading Rust language model...")
-    rust_model = mlx_ocr_2.PyGlmOcrModel.load(MODEL_DIR)
+    print("Loading Rust full model...")
+    rust_model = mlx_ocr_2.PyFullModel.load(MODEL_DIR)
 
     print("Replacing Python language model with Rust backend...")
     rust_lm = RustLanguageModel(rust_model, model.language_model)
     model.language_model = rust_lm
 
-    print("Rust language model active!")
+    print("Rust full model active!")
     return model, processor, config
 
 server.load_model_resources = _patched_load

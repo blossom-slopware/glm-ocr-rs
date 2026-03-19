@@ -6,7 +6,20 @@ use serde_json::Value;
 #[derive(Debug, Clone, Deserialize)]
 pub struct FullConfig {
     pub text_config: TextConfig,
+    pub vision_config: crate::vision::config::VisionConfig,
+    #[serde(default = "default_image_token_id")]
+    pub image_token_id: i32,
+    #[serde(default = "default_video_token_id")]
+    pub video_token_id: i32,
+    #[serde(default = "default_image_start_token_id")]
+    pub image_start_token_id: i32,
+    #[serde(default)]
+    pub eos_token_id: Vec<i32>,
 }
+
+fn default_image_token_id() -> i32 { 59280 }
+fn default_video_token_id() -> i32 { 59281 }
+fn default_image_start_token_id() -> i32 { 59256 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TextConfig {

@@ -90,6 +90,11 @@ impl GlmOcrModel {
         self.language_model.forward_with_embeds(inputs_embeds, position_ids, cache)
     }
 
+    /// Get text token embeddings without running the transformer.
+    pub fn embed_tokens(&mut self, input_ids: &Array) -> Result<Array, Exception> {
+        self.language_model.model.embed_tokens.forward(input_ids)
+    }
+
     /// Create a cache vector for this model with initialized entries.
     pub fn new_cache(&self) -> Vec<Option<ConcatKeyValueCache>> {
         (0..self.num_layers).map(|_| Some(ConcatKeyValueCache::new())).collect()
