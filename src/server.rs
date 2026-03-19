@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
-use axum::response::{IntoResponse, Json as AxumJson};
+use axum::response::{IntoResponse, Json as AxumJson, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use futures::stream::Stream;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -88,6 +88,7 @@ async fn ocr_handler(
         "OCR completed: {} tokens, stop_reason={:?}",
         result.generated_tokens, result.stop_reason
     );
+    _abort_guard.abort.set();
     Ok(AxumJson(result).into_response())
 }
 
@@ -98,7 +99,7 @@ async fn ocr_handler(
 async fn ocr_stream_handler(
     State(state): State<Arc<AppState>>,
     AxumJson(req): AxumJson<OcrRequest>,
-) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     log::info!(
         "POST /ocr/stream max_tokens={} temp={}",
         req.max_tokens, req.temperature
@@ -167,10 +168,23 @@ async fn ocr_stream_handler(
             "OCR stream completed: {} tokens, stop_reason={}",
             result.generated_tokens, stop_reason_str
         );
+
+        // Mark abort so the AbortOnDrop guard won't log a spurious
+        // "Client disconnected" message on normal completion.
+        _abort_guard.abort.set();
     });
 
     let stream = ReceiverStream::new(rx);
-    Ok(Sse::new(stream))
+    let mut response = Sse::new(stream).into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        "text/event-stream; charset=utf-8".parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        "no-cache".parse().unwrap(),
+    );
+    Ok(response)
 }
 
 fn map_ocr_error(e: OcrError) -> (StatusCode, String) {

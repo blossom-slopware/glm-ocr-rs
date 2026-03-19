@@ -11,6 +11,17 @@ struct ActiveRequest {
     abort: AbortSignal,
 }
 
+struct ActiveRequestGuard {
+    active: Arc<Mutex<Option<ActiveRequest>>>,
+}
+
+impl Drop for ActiveRequestGuard {
+    fn drop(&mut self) {
+        let mut active_guard = self.active.blocking_lock();
+        *active_guard = None;
+    }
+}
+
 /// Error type for the OCR service layer.
 #[derive(Debug)]
 pub enum OcrError {
@@ -70,16 +81,11 @@ impl OcrService {
         let active = self.active.clone();
 
         let handle = tokio::task::spawn_blocking(move || {
+            let _active_guard = ActiveRequestGuard {
+                active: active.clone(),
+            };
             let mut engine = engine.blocking_lock();
-            let result = engine.run(&req, &abort, on_text_chunk);
-
-            // Clear active request when done
-            {
-                let mut active_guard = active.blocking_lock();
-                *active_guard = None;
-            }
-
-            result
+            engine.run(&req, &abort, on_text_chunk)
         });
 
         Ok(handle)

@@ -1,6 +1,6 @@
-use mlx_rs::{error::Exception, Array};
+use mlx_rs::{error::Exception, transforms, with_new_default_stream, Array, Stream};
 use mlx_rs::ops::{self, indexing::IndexOp};
-use mlx_lm::cache::KeyValueCache;
+use mlx_lm::cache::{ConcatKeyValueCache, KeyValueCache};
 
 use crate::full_model::Model;
 use crate::ocr::abort::AbortSignal;
@@ -45,6 +45,12 @@ pub struct GenerateStepResult {
 pub struct GenerateSummary {
     pub generated_tokens: usize,
     pub stopped_by_stop_token: bool,
+}
+
+pub struct GenerateState {
+    pub cache: Vec<Option<ConcatKeyValueCache>>,
+    pub generated_tokens: Vec<i32>,
+    pub stream: Stream,
 }
 
 /// Error type for generation — supports abort and MLX errors.
@@ -108,6 +114,122 @@ fn step(
     Ok((y, logprobs))
 }
 
+fn eval_cache(cache: &[Option<ConcatKeyValueCache>]) -> Result<(), Exception> {
+    let mut arrays = Vec::new();
+    for layer_cache in cache {
+        if let Some(layer_cache) = layer_cache {
+            if let Some(keys) = layer_cache.keys() {
+                arrays.push(keys);
+            }
+            if let Some(values) = layer_cache.values() {
+                arrays.push(values);
+            }
+        }
+    }
+    if arrays.is_empty() {
+        Ok(())
+    } else {
+        transforms::eval(arrays)
+    }
+}
+
+pub fn prefill(
+    model: &mut Model,
+    input_ids: &Array,
+    pixel_values: Option<&Array>,
+    image_grid_thw: Option<&[(i32, i32, i32)]>,
+    mask: Option<&Array>,
+    config: &GenerateConfig,
+    abort: &AbortSignal,
+) -> Result<(GenerateState, i32), GenerateError> {
+    let mut cache = model.new_cache();
+    let mut generated_tokens = Vec::new();
+
+    let stream = Stream::new();
+    let (first_token, generated_tokens) = with_new_default_stream(stream.clone(), || {
+        let inputs_embeds = model.get_input_embeddings(input_ids, pixel_values, image_grid_thw, mask)?;
+        let position_ids = model.compute_position_ids(input_ids, 0)?;
+
+        let seq_len = inputs_embeds.shape()[1];
+        let mut processed = 0i32;
+
+        while processed < seq_len - 1 {
+            if abort.is_set() {
+                return Err(GenerateError::Aborted);
+            }
+
+            let chunk_end = std::cmp::min(processed + config.prefill_step_size, seq_len - 1);
+            let chunk_embeds = inputs_embeds.index((.., processed..chunk_end, ..));
+            let chunk_pos = position_ids.index((.., .., processed..chunk_end));
+
+            let logits = model.language_model.forward_with_embeds(&chunk_embeds, &chunk_pos, &mut cache)?;
+            logits.eval()?;
+            eval_cache(&cache)?;
+            processed = chunk_end;
+
+            if processed % (config.prefill_step_size * 2) == 0 {
+                mlx_rs::transforms::compile::clear_cache();
+            }
+        }
+
+        let last_embeds = inputs_embeds.index((.., processed.., ..));
+        let last_pos = position_ids.index((.., .., processed..));
+        let logits = model.language_model.forward_with_embeds(&last_embeds, &last_pos, &mut cache)?;
+
+        input_ids.eval()?;
+        let input_len = input_ids.shape()[1];
+        for j in 0..input_len {
+            let tok = input_ids.index((0, j));
+            tok.eval()?;
+            generated_tokens.push(tok.item::<i32>());
+        }
+
+        let (y, _logprobs) = step(&logits, &generated_tokens, config)?;
+        transforms::async_eval([&y])?;
+        y.eval()?;
+        let token_id = y.item::<i32>();
+        generated_tokens.push(token_id);
+        Ok::<_, GenerateError>((token_id, generated_tokens))
+    })?;
+
+    Ok((
+        GenerateState {
+            cache,
+            generated_tokens,
+            stream,
+        },
+        first_token,
+    ))
+}
+
+pub fn decode_next(
+    model: &mut Model,
+    state: &mut GenerateState,
+    config: &GenerateConfig,
+    abort: &AbortSignal,
+) -> Result<i32, GenerateError> {
+    if abort.is_set() {
+        return Err(GenerateError::Aborted);
+    }
+
+    with_new_default_stream(state.stream.clone(), || {
+        let cache_offset = state.cache[0].as_ref().map(|c| c.offset()).unwrap_or(0);
+        let current_token = *state.generated_tokens.last().unwrap();
+
+        let y_input = Array::from_int(current_token).reshape(&[1, 1])?;
+        let decode_pos = model.compute_position_ids(&y_input, cache_offset)?;
+
+        let logits = model.language_model.forward(&y_input, &decode_pos, &mut state.cache)?;
+        let (next_y, _next_logprobs) = step(&logits, &state.generated_tokens, config)?;
+        transforms::async_eval([&next_y])?;
+        next_y.eval()?;
+        eval_cache(&state.cache)?;
+        let next_token_id = next_y.item::<i32>();
+        state.generated_tokens.push(next_token_id);
+        Ok::<_, GenerateError>(next_token_id)
+    })
+}
+
 /// Run generation incrementally: prefill + decode loop.
 /// Calls `on_token` for each sampled token as soon as it is available.
 /// The callback can return `Err(GenerateError::Aborted)` to stop generation.
@@ -124,47 +246,6 @@ pub fn generate_stream<F>(
 where
     F: FnMut(i32) -> Result<(), GenerateError>,
 {
-    let mut cache = model.new_cache();
-    let mut generated_tokens: Vec<i32> = Vec::new();
-
-    // Phase 1: Get input embeddings (vision + merge if needed)
-    let inputs_embeds = model.get_input_embeddings(input_ids, pixel_values, image_grid_thw, mask)?;
-    let position_ids = model.compute_position_ids(input_ids, 0)?;
-
-    // Phase 2: Chunked prefill
-    let seq_len = inputs_embeds.shape()[1];
-    let mut processed = 0i32;
-
-    while processed < seq_len - 1 {
-        if abort.is_set() {
-            return Err(GenerateError::Aborted);
-        }
-
-        let chunk_end = std::cmp::min(processed + config.prefill_step_size, seq_len - 1);
-        let chunk_embeds = inputs_embeds.index((.., processed..chunk_end, ..));
-        let chunk_pos = position_ids.index((.., .., processed..chunk_end));
-
-        let _logits = model.language_model.forward_with_embeds(&chunk_embeds, &chunk_pos, &mut cache)?;
-        _logits.eval()?;
-        processed = chunk_end;
-    }
-
-    // Last chunk (or full if short enough) — get first token
-    let last_embeds = inputs_embeds.index((.., processed.., ..));
-    let last_pos = position_ids.index((.., .., processed..));
-    let logits = model.language_model.forward_with_embeds(&last_embeds, &last_pos, &mut cache)?;
-
-    // Collect initial tokens for repetition penalty context
-    {
-        input_ids.eval()?;
-        let input_len = input_ids.shape()[1];
-        for j in 0..input_len {
-            let tok = input_ids.index((0, j));
-            tok.eval()?;
-            generated_tokens.push(tok.item::<i32>());
-        }
-    }
-
     if config.max_tokens == 0 {
         return Ok(GenerateSummary {
             generated_tokens: 0,
@@ -172,10 +253,15 @@ where
         });
     }
 
-    let (y, mut _logprobs) = step(&logits, &generated_tokens, config)?;
-    y.eval()?;
-    let token_id: i32 = y.item();
-    generated_tokens.push(token_id);
+    let (mut state, token_id) = prefill(
+        model,
+        input_ids,
+        pixel_values,
+        image_grid_thw,
+        mask,
+        config,
+        abort,
+    )?;
     on_token(token_id)?;
 
     let mut emitted_tokens = 1usize;
@@ -190,23 +276,7 @@ where
 
     // Phase 3: Decode loop
     for _ in 1..config.max_tokens {
-        if abort.is_set() {
-            return Err(GenerateError::Aborted);
-        }
-
-        let cache_offset = cache[0].as_ref().map(|c| c.offset()).unwrap_or(0);
-        let current_token = *generated_tokens.last().unwrap();
-
-        // Build token input [1, 1]
-        let y_input = Array::from_int(current_token).reshape(&[1, 1])?;
-        let decode_pos = model.compute_position_ids(&y_input, cache_offset)?;
-
-        let logits = model.language_model.forward(&y_input, &decode_pos, &mut cache)?;
-        let (next_y, _next_logprobs) = step(&logits, &generated_tokens, config)?;
-        next_y.eval()?;
-        let next_token_id: i32 = next_y.item();
-
-        generated_tokens.push(next_token_id);
+        let next_token_id = decode_next(model, &mut state, config, abort)?;
         on_token(next_token_id)?;
         emitted_tokens += 1;
 

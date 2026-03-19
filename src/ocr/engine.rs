@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mlx_rs::Array;
 
@@ -15,6 +15,62 @@ pub const DEFAULT_OCR_PROMPT: &str =
     "Recognize the text in the image and output in Markdown format. \
      Preserve the original layout (headings/paragraphs/tables/formulas). \
      Do not fabricate content that does not exist in the image.";
+
+/// Tracks token generation speed, logging periodically and at finish.
+struct TpsLogger {
+    start: Instant,
+    last_log: Instant,
+    total_tokens: usize,
+    interval_tokens: usize,
+    log_interval: Duration,
+}
+
+impl TpsLogger {
+    fn new(log_interval: Duration) -> Self {
+        let now = Instant::now();
+        TpsLogger {
+            start: now,
+            last_log: now,
+            total_tokens: 0,
+            interval_tokens: 0,
+            log_interval,
+        }
+    }
+
+    /// Record one token. Logs at info level if the interval has elapsed.
+    fn tick(&mut self) {
+        self.total_tokens += 1;
+        self.interval_tokens += 1;
+
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_log);
+        if elapsed >= self.log_interval {
+            let overall_tps = self.total_tokens as f64 / now.duration_since(self.start).as_secs_f64();
+            let interval_tps = self.interval_tokens as f64 / elapsed.as_secs_f64();
+            log::info!(
+                "Generating: {} tokens so far ({:.1} tok/s overall, {:.1} tok/s recent)",
+                self.total_tokens, overall_tps, interval_tps
+            );
+            self.last_log = now;
+            self.interval_tokens = 0;
+        }
+    }
+
+    /// Log final summary at info level.
+    fn finish(&self, stop_reason: &StopReason) {
+        let elapsed = self.start.elapsed();
+        let ms = elapsed.as_millis();
+        let tps = if ms > 0 {
+            self.total_tokens as f64 / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        log::info!(
+            "Generation completed: {} tokens in {}ms ({:.1} tok/s) stop_reason={:?}",
+            self.total_tokens, ms, tps, stop_reason
+        );
+    }
+}
 
 /// The OCR engine owns model, tokenizer, image processor, and chat template.
 /// All inference happens synchronously through `run()`.
@@ -124,7 +180,7 @@ impl OcrEngine {
 
         // ── 6. Generate with streaming decode ──
         log::info!("Starting generation...");
-        let gen_start = Instant::now();
+        let mut tps = TpsLogger::new(Duration::from_secs(2));
         let mut decode_stream = self.tokenizer.inner.decode_stream(true);
         let mut generated_token_ids: Vec<i32> = Vec::new();
         let mut emitted_text = String::new();
@@ -151,6 +207,7 @@ impl OcrEngine {
                 }
 
                 generated_token_ids.push(token_id);
+                tps.tick();
 
                 match decode_stream.step(token_id as u32) {
                     Ok(Some(text_chunk)) if !text_chunk.is_empty() => {
@@ -169,8 +226,6 @@ impl OcrEngine {
                 Ok(())
             },
         );
-
-        let gen_ms = gen_start.elapsed().as_millis();
 
         // ── 7. Determine stop reason and handle result ──
         let (summary_tokens, stop_reason) = match result {
@@ -194,15 +249,7 @@ impl OcrEngine {
             }
         };
 
-        let tok_per_sec = if gen_ms > 0 {
-            summary_tokens as f64 / (gen_ms as f64 / 1000.0)
-        } else {
-            0.0
-        };
-        log::info!(
-            "Generation completed: {} tokens in {}ms ({:.1} tok/s) stop_reason={:?}",
-            summary_tokens, gen_ms, tok_per_sec, stop_reason
-        );
+        tps.finish(&stop_reason);
 
         // ── 8. Final flush — emit any remaining decoded text ──
         let final_text = self.tokenizer.decode(&generated_token_ids, true);
@@ -220,9 +267,9 @@ impl OcrEngine {
 
         let total_ms = total_start.elapsed().as_millis();
         log::info!(
-            "OCR request completed: {} prompt + {} gen tokens, {} chunks in {}ms (preprocess={}ms, tokenize={}ms, generate={}ms)",
+            "OCR request completed: {} prompt + {} gen tokens, {} chunks in {}ms (preprocess={}ms, tokenize={}ms)",
             prompt_tokens, summary_tokens, chunk_count, total_ms,
-            preprocess_ms, tokenize_ms, gen_ms
+            preprocess_ms, tokenize_ms
         );
 
         OcrRunResult {
