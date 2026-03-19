@@ -3,17 +3,37 @@ name = "mlx-ocr-2"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "glm-ocr-server"
+path = "src/main.rs"
+
 [lib]
 name = "mlx_ocr_2"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 mlx-rs = { path = "../mlx-rs/mlx-rs", features = ["safetensors"] }
 mlx-lm = { path = "../mlx-rs/mlx-lm" }
+tokenizers = { path = "../tokenizers/tokenizers", default-features = false, features = ["onig"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-pyo3 = { version = "0.23", features = ["extension-module"] }
-numpy = "0.23"
 log = "0.4"
 env_logger = "0.11"
+
+# HTTP server
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+
+# Image processing
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# Template + utilities
+minijinja = { version = "2", features = ["json"] }
+minijinja-contrib = "2"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+reqwest = { version = "0.12", features = ["blocking"] }
