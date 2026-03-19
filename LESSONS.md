@@ -15,11 +15,6 @@ The full GLM-OCR language model is ported to Rust via `mlx-rs` and verified nume
 - `model/text_model.rs` — Transformer stack: embed_tokens → rotary_emb → 16 decoder layers → final norm. Supports both `forward_with_positions` (token ids) and `forward_with_embeds` (pre-computed embeddings from vision encoder)
 - `model/language_model.rs` — `LanguageModel` (text_model + lm_head) and `GlmOcrModel` (outer wrapper matching safetensors key prefix `language_model.`)
 - `loader.rs` — Safetensors weight loading (handles both single-file and sharded via `model.safetensors.index.json`)
-- `py_bindings.rs` — PyO3 interface: `load`, `prefill`, `decode`, `prefill_embeds`, `continue_prefill_embeds`, `cache_offset`, `num_layers`
-
-**Python integration layer:**
-- `rust_lm_wrapper.py` — `RustLanguageModel` drop-in replacement for Python's `LanguageModel`, handles position_ids computation and prefill/decode routing to Rust via numpy bridge
-- `run_server.py` — Server launcher that monkey-patches `mlx_vlm.server.load_model_resources` to swap in the Rust language model while keeping the Python vision encoder
 
 ### Vision Encoder (Complete)
 
@@ -38,21 +33,11 @@ The full vision pipeline is ported to Rust via `mlx-rs` and verified numerically
 
 ### Config (Complete)
 
-`FullConfig` has both `text_config` and `vision_config`, plus `image_token_id`.
+`FullConfig` has `text_config`, `vision_config`, `image_token_id`, `video_token_id`, `image_start_token_id`, `eos_token_id`.
 
 ### Weight Sanitization (Complete)
 
 `VisionModel::sanitize_weights()` conditionally transposes Conv3d/Conv2d weights from PyTorch layout to MLX channels-last layout by checking shape dimensions. Called after `load_safetensors` in `load_vision_model`.
-
-### Verification
-
-If numerical difference in a reasonable range, run end2end tests, and compare the quality of output.
-
----
-
-## What Remains To Do
-
-Nothing — the full model is implemented in Rust.
 
 ### Image-Text Embedding Merge (Complete)
 
@@ -72,7 +57,37 @@ Nothing — the full model is implemented in Rust.
 
 ### PyO3 Interface (Complete)
 
-`py_bindings.rs` — Single `PyFullModel` class exposing: `load`, `forward`, `generate`, `prefill`, `decode`, `prefill_embeds`, `continue_prefill_embeds`, `reset_cache`, `cache_offset`, `num_layers`, `eos_token_ids`.
+`py_bindings.rs` — Single `PyFullModel` class exposing: `load`, `forward`, `generate`, `get_text_embeddings`, `get_input_embeddings`, `prefill`, `decode`, `prefill_embeds`, `continue_prefill_embeds`, `reset_cache`, `cache_offset`, `num_layers`, `eos_token_ids`.
+
+### Python Integration (Complete — Rust powers entire model)
+
+`run_server.py` replaces the **entire** Python `Model` object with `RustFullModel`, which routes:
+- `model.get_input_embeddings()` → Rust vision encoder + embedding merge via `PyFullModel.get_input_embeddings()`
+- `model.language_model(...)` → Rust LM forward via `PyFullModel.prefill/decode/prefill_embeds`
+
+Verified via `RUST_LOG=info`: all vision blocks (24), patch_embed, downsample, merger, and LM run in Rust. Zero Python-side model computation.
+
+## What Remains To Do
+
+### Eliminate Python Entirely
+
+The final goal is a standalone Rust binary with no Python dependency. Remaining Python-side work:
+
+1. **Image preprocessing** — Python's `processor` (from `transformers`) handles image loading, resizing, padding, pixel normalization, and `grid_thw` computation. Port to Rust (use `image` crate for loading, reimplement the Qwen2VL image processor logic).
+
+2. **Tokenization** — Python's `processor.tokenizer` handles chat template formatting, BPE tokenization, and special token insertion (`<image_start>`, `<image>`, etc.). Port to Rust (use `tokenizers` crate with the model's `tokenizer.json`).
+
+3. **Detokenization + streaming** — Token IDs → text decoding, incremental detokenization for streaming output. The `tokenizers` crate handles this.
+
+4. **HTTP server** — Replace `mlx_vlm.server` (FastAPI/uvicorn) with a Rust HTTP server (e.g., `axum`) serving the OpenAI-compatible `/chat/completions` endpoint.
+
+5. **Chat template** — The Jinja2 chat template in `tokenizer_config.json` needs to be replicated in Rust for formatting multi-turn conversations with image placeholders.
+
+Once these are done, the entire pipeline runs as a single Rust binary: HTTP request → image preprocess → tokenize → vision encoder → merge → LM → sample → detokenize → HTTP response.
+
+## Verification
+
+Run end2end tests with `test_ocr.py` and compare the quality of output.
 
 ---
 
@@ -120,12 +135,14 @@ Python MLX's `scaled_dot_product_attention` accepts `mask="causal"` (string hint
 
 ### 9. Python Integration Architecture
 
-For the server integration, the cleanest approach is:
-- Keep the Python `Model` class (vision tower + `get_input_embeddings`) intact
-- Replace only `model.language_model` with a `RustLanguageModel` wrapper
-- The wrapper replicates position_ids/rope_delta computation in Python, then calls Rust for the actual transformer forward
+**THE SERVER (`mlx_vlm`) CALLS `model.get_input_embeddings()` THEN `model.language_model(...)`. TO REPLACE THE FULL MODEL WITH RUST, YOU MUST REPLACE THE ENTIRE `model` OBJECT, NOT JUST `model.language_model`. IF YOU ONLY SWAP `model.language_model`, THE PYTHON VISION ENCODER AND EMBEDDING MERGE STILL RUN IN PYTHON AND YOUR RUST VISION/MERGE CODE IS DEAD CODE.**
+
+The correct approach:
+- Replace the entire `model` with `RustFullModel` which implements both `get_input_embeddings()` (routing to Rust vision + merge) and `.language_model(...)` (routing to Rust LM)
+- `RustFullModel.get_input_embeddings()` calls `PyFullModel.get_input_embeddings()` for vision+merge, or `PyFullModel.get_text_embeddings()` for text-only
+- `RustFullModel.language_model` is a `RustLanguageModel` that calls `PyFullModel.prefill/decode/prefill_embeds`
 - Dummy `_DummyCache` objects track offset for position_ids computation; actual KV storage is in Rust's `ConcatKeyValueCache`
-- The wrapper must implement `make_cache()` to return dummy caches (checked by `make_prompt_cache`)
+- The wrapper must satisfy `mlx_vlm` server contract: `model.config`, `model.get_input_embeddings(input_ids, pixel_values, **kwargs) -> InputEmbeddingsFeatures`, `model.language_model(inputs, inputs_embeds=, cache=, **kwargs) -> LanguageModelOutput`
 
 ### 10. Vision PatchEmbed Reshape Order
 
@@ -140,6 +157,7 @@ The pixel_values input `[N, 1176]` has data packed as `C*T*H*W = 3*2*14*14`. You
 - `expand_dims(0)` takes a single `i32`, not a slice. NOT `expand_dims(&[0])`.
 - `as_dtype(Dtype::Float32)` uses the `Dtype` enum. NOT `as_dtype::<f32>()`.
 - `Array::from_f32(val)` for scalar creation. NOT `Array::from_float(val)`.
+- `Array::from_int(val)` for i32 scalar. NOT `Array::from_i32(val)`.
 - `nn::gelu(&x)` is the public path (re-exported from private `activation` module). NOT `nn::activation::gelu(&x)`.
 - `LayerNorm::new(dim)` is the constructor. NOT `LayerNormBuilder::new().dimensions(d)`.
 
@@ -155,3 +173,6 @@ mlx-rs has no native cu_seqlens support in SDPA. Implement by computing segment 
 
 The bf16 safetensors may already have Conv weights in MLX channels-last layout. Check shape to determine if transpose is needed: for Conv3d, if `shape[1] == in_channels` it's PyTorch layout; for Conv2d, if `shape[1] > shape[2]` it's PyTorch layout.
 
+### 16. mlx-rs Generated Macro Signatures
+
+The `#[generate_macro]` + `#[default_device]` pattern strips the `stream` parameter. So free functions like `ops::sum(array, keep_dims)`, `ops::max(array, keep_dims)`, `ops::cumsum(a, axis, reverse, inclusive)` — NOT the `_device` variants. `ops::which(cond, a, b)` is the correct conditional select (NOT `ops::r#where` which requires stream). `argmax_axis` lives in `ops::indexing`, not `ops`.

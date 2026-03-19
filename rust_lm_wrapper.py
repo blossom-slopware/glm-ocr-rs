@@ -1,4 +1,13 @@
-"""Drop-in replacement for LanguageModel backed by Rust PyFullModel."""
+"""Full Rust model wrapper — replaces the ENTIRE Python Model, not just language_model.
+
+The mlx_vlm server calls:
+  1. model.get_input_embeddings(input_ids, pixel_values, **kwargs) → InputEmbeddingsFeatures
+     This must run vision encoder + embedding merge IN RUST.
+  2. model.language_model(inputs, inputs_embeds=, cache=, **kwargs) → LanguageModelOutput
+     This must run the LM forward IN RUST.
+
+Both are routed through PyFullModel which owns vision + LM + merge in Rust.
+"""
 
 import numpy as np
 import mlx.core as mx
@@ -6,7 +15,7 @@ import mlx_ocr_2
 
 
 class _DummyCache:
-    """Tracks offset for position_ids computation without actually storing KV."""
+    """Tracks offset for the server's cache management. Actual KV lives in Rust."""
     def __init__(self):
         self.offset = 0
         self.keys = None
@@ -18,7 +27,6 @@ class _DummyCache:
 
     @property
     def state(self):
-        # Return empty arrays so mx.eval doesn't crash
         return mx.zeros((1,)), mx.zeros((1,))
 
     @state.setter
@@ -33,30 +41,25 @@ class _DummyCache:
 
 
 class _FakeTextModel:
-    """Provides .layers property for make_prompt_cache."""
+    """Provides .layers for make_prompt_cache."""
     def __init__(self, num_layers):
         self.layers = [None] * num_layers
 
 
 class RustLanguageModel:
-    """Drop-in replacement for LanguageModel, backed by Rust."""
+    """Drop-in for model.language_model — routes LM calls to Rust PyFullModel."""
 
-    def __init__(self, rust_model, original_language_model):
-        self.rust_model = rust_model
+    def __init__(self, rust_full_model, original_language_model):
+        self.rust_model = rust_full_model
         self.args = original_language_model.args
         self.config = original_language_model.config
         self.model_type = original_language_model.model_type
         self.model = _FakeTextModel(self.args.num_hidden_layers)
-        # Copy the embed_tokens so get_input_embeddings can use it
-        self.model.embed_tokens = original_language_model.model.embed_tokens
         self._rope_deltas = None
         self._position_ids = None
-        # Copy get_rope_index from original
         self._original_lm = original_language_model
-        self._cache_offset = 0
 
     def make_cache(self):
-        """Return dummy caches for generate_step's make_prompt_cache."""
         return [_DummyCache() for _ in range(self.args.num_hidden_layers)]
 
     @property
@@ -83,7 +86,6 @@ class RustLanguageModel:
         if pixel_values is not None:
             self._rope_deltas = None
 
-        # Compute cache_offset from the dummy cache objects
         cache_offset = 0
         if cache and cache[0] is not None:
             offset = cache[0].offset
@@ -94,7 +96,6 @@ class RustLanguageModel:
             else:
                 raise ValueError(f"Unexpected cache offset type: {type(offset)}")
 
-        # Compute position_ids (replicated from Python LanguageModel.__call__)
         rope_mask = mask
         if mask is not None and mask.shape[-1] != inputs.shape[-1]:
             rope_mask = None
@@ -137,7 +138,6 @@ class RustLanguageModel:
                     position_ids, (3, batch_size, seq_length)
                 )
 
-        # Convert position_ids to numpy
         mx.eval(position_ids)
         pos_np = np.array(position_ids.astype(mx.int32))
         pos_flat = pos_np.flatten().astype(np.int32)
@@ -146,7 +146,6 @@ class RustLanguageModel:
         is_prefill = (inputs_embeds is not None) or (inputs.shape[1] > 1 and cache_offset == 0)
 
         if inputs_embeds is not None:
-            # Prefill with embeddings (from vision encoder)
             mx.eval(inputs_embeds)
             embeds_f32 = np.array(inputs_embeds.astype(mx.float32))
             embeds_flat = embeds_f32.flatten().astype(np.float32)
@@ -161,7 +160,6 @@ class RustLanguageModel:
                     embeds_flat, embeds_shape, pos_flat, pos_shape
                 )
         else:
-            # Decode with token ids
             mx.eval(inputs)
             tok_np = np.array(inputs.astype(mx.int32))
             tok_flat = tok_np.flatten().astype(np.int32)
@@ -176,11 +174,9 @@ class RustLanguageModel:
                     tok_flat, tok_shape, pos_flat, pos_shape
                 )
 
-        # Convert back to mlx
         logits_np = np.array(logits_flat).reshape(logits_shape)
         logits_mx = mx.array(logits_np)
 
-        # Update dummy cache offsets
         seq_len = inputs_embeds.shape[1] if inputs_embeds is not None else inputs.shape[1]
         if cache:
             for c in cache:
@@ -200,6 +196,82 @@ class RustLanguageModel:
         return self.args.num_key_value_heads
 
 
-def make_dummy_cache(num_layers):
-    """Create dummy cache objects that track offset for position_ids."""
-    return [_DummyCache() for _ in range(num_layers)]
+class RustFullModel:
+    """Drop-in replacement for the ENTIRE Python Model class.
+
+    Routes get_input_embeddings() through Rust vision+merge,
+    and language_model() through Rust LM.
+    """
+
+    def __init__(self, rust_full_model, original_model):
+        self.rust_model = rust_full_model
+        self.config = original_model.config
+        # Replace language_model with Rust-backed wrapper
+        self.language_model = RustLanguageModel(rust_full_model, original_model.language_model)
+
+    @property
+    def layers(self):
+        return self.language_model.layers
+
+    def get_input_embeddings(self, input_ids, pixel_values=None, **kwargs):
+        """Run vision encoder + merge IN RUST, return InputEmbeddingsFeatures."""
+        from mlx_vlm.models.base import InputEmbeddingsFeatures
+
+        image_grid_thw = kwargs.get("image_grid_thw", None)
+        video_grid_thw = kwargs.get("video_grid_thw", None)
+        mask = kwargs.get("mask", None)
+        grid_thw = image_grid_thw if image_grid_thw is not None else video_grid_thw
+
+        if pixel_values is None:
+            # Text-only: reset position state, return text embeddings
+            self.language_model._position_ids = None
+            self.language_model._rope_deltas = None
+            # We need to get embeddings from Rust — call forward with just input_ids
+            mx.eval(input_ids)
+            tok_np = np.array(input_ids.astype(mx.int32))
+            tok_flat = tok_np.flatten().astype(np.int32)
+            tok_shape = list(tok_np.shape)
+            embeds_flat, embeds_shape = self.rust_model.get_text_embeddings(
+                tok_flat, tok_shape
+            )
+            embeds_np = np.array(embeds_flat).reshape(embeds_shape)
+            inputs_embeds = mx.array(embeds_np)
+            return InputEmbeddingsFeatures(inputs_embeds=inputs_embeds)
+
+        # Vision path: run full vision+merge pipeline in Rust
+        mx.eval(input_ids)
+        tok_np = np.array(input_ids.astype(mx.int32))
+        tok_flat = tok_np.flatten().astype(np.int32)
+        tok_shape = list(tok_np.shape)
+
+        mx.eval(pixel_values)
+        pv_np = np.array(pixel_values.astype(mx.float32))
+        pv_flat = pv_np.flatten().astype(np.float32)
+        pv_shape = list(pv_np.shape)
+
+        mx.eval(grid_thw)
+        grid_np = np.array(grid_thw.astype(mx.int32))
+        grid_flat = grid_np.flatten().astype(np.int32)
+        grid_shape = list(grid_np.shape)
+
+        embeds_flat, embeds_shape = self.rust_model.get_input_embeddings(
+            tok_flat, tok_shape, pv_flat, pv_shape, grid_flat, grid_shape
+        )
+        embeds_np = np.array(embeds_flat).reshape(embeds_shape)
+        inputs_embeds = mx.array(embeds_np)
+
+        # Pre-calculate position_ids (like Python Model.get_input_embeddings)
+        if image_grid_thw is not None or video_grid_thw is not None:
+            position_ids, rope_deltas = self.language_model.get_rope_index(
+                input_ids, image_grid_thw, video_grid_thw, mask
+            )
+            self.language_model._position_ids = position_ids
+            self.language_model._rope_deltas = rope_deltas
+
+        return InputEmbeddingsFeatures(inputs_embeds=inputs_embeds)
+
+    def sanitize(self, weights):
+        return weights
+
+    def parameters(self):
+        return {}

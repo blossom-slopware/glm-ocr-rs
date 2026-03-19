@@ -176,6 +176,57 @@ impl PyFullModel {
 
         Ok(result)
     }
+    /// Get text-only embeddings (no vision). Returns (embeds_flat, embeds_shape).
+    fn get_text_embeddings<'py>(
+        &mut self,
+        py: Python<'py>,
+        input_ids: PyReadonlyArray1<i32>,
+        input_ids_shape: Vec<i32>,
+    ) -> PyResult<(Bound<'py, PyArray1<f32>>, Vec<i32>)> {
+        let input_ids_arr = Array::from_slice(
+            input_ids.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+            &input_ids_shape,
+        );
+        let embeds = self.inner.language_model.embed_tokens(&input_ids_arr)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        array_to_py(py, &embeds)
+    }
+
+    /// Run vision encoder + embedding merge in Rust. Returns (embeds_flat, embeds_shape).
+    fn get_input_embeddings<'py>(
+        &mut self,
+        py: Python<'py>,
+        input_ids: PyReadonlyArray1<i32>,
+        input_ids_shape: Vec<i32>,
+        pixel_values: PyReadonlyArray1<f32>,
+        pixel_values_shape: Vec<i32>,
+        grid_thw: PyReadonlyArray1<i32>,
+        grid_thw_shape: Vec<i32>,
+    ) -> PyResult<(Bound<'py, PyArray1<f32>>, Vec<i32>)> {
+        let input_ids_arr = Array::from_slice(
+            input_ids.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+            &input_ids_shape,
+        );
+        let pv_arr = Array::from_slice(
+            pixel_values.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+            &pixel_values_shape,
+        );
+        let grid_slice = grid_thw.as_slice().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let num_images = grid_thw_shape[0] as usize;
+        let grid: Vec<(i32, i32, i32)> = (0..num_images)
+            .map(|i| (grid_slice[i * 3], grid_slice[i * 3 + 1], grid_slice[i * 3 + 2]))
+            .collect();
+
+        let embeds = self.inner.get_input_embeddings(
+            &input_ids_arr,
+            Some(&pv_arr),
+            Some(&grid),
+            None,
+        ).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        array_to_py(py, &embeds)
+    }
+
     /// Get number of decoder layers.
     fn num_layers(&self) -> i32 {
         self.inner.language_model.num_layers
