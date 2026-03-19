@@ -1,0 +1,17 @@
+[package]
+name = "mlx-ocr-2"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mlx_ocr_2"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mlx-rs = { path = "../mlx-rs/mlx-rs", features = ["safetensors"] }
+mlx-lm = { path = "../mlx-rs/mlx-lm" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
