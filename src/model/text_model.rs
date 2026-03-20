@@ -75,24 +75,10 @@ impl GlmOcrTextModel {
                     owned_mask = AttentionMask::None;
                     &owned_mask
                 } else {
-                    let offset = cache.first()
-                        .and_then(|c| c.as_ref())
-                        .map(|c| c.offset())
-                        .unwrap_or(0);
-                    if offset == 0 {
-                        // No cache offset — use built-in causal mask
-                        owned_mask = AttentionMask::Causal;
-                        &owned_mask
-                    } else {
-                        // Cache offset > 0 — need explicit sliced mask
-                        let total_len = offset + seq_len;
-                        let full_mask = nn::MultiHeadAttention::create_additive_causal_mask::<f32>(total_len)?
-                            .as_dtype(h.dtype())?;
-                        use mlx_rs::ops::indexing::IndexOp;
-                        let sliced = full_mask.index((offset..offset + seq_len, ..));
-                        owned_mask = AttentionMask::Array(sliced);
-                        &owned_mask
-                    }
+                    // Match Python mlx-vlm: rely on SDPA's built-in causal path for
+                    // cached decode instead of materializing a sliced additive mask.
+                    owned_mask = AttentionMask::Causal;
+                    &owned_mask
                 }
             }
         };
@@ -135,22 +121,10 @@ impl GlmOcrTextModel {
                     owned_mask = AttentionMask::None;
                     &owned_mask
                 } else {
-                    let offset = cache.first()
-                        .and_then(|c| c.as_ref())
-                        .map(|c| c.offset())
-                        .unwrap_or(0);
-                    if offset == 0 {
-                        owned_mask = AttentionMask::Causal;
-                        &owned_mask
-                    } else {
-                        let total_len = offset + seq_len;
-                        let full_mask = nn::MultiHeadAttention::create_additive_causal_mask::<f32>(total_len)?
-                            .as_dtype(h.dtype())?;
-                        use mlx_rs::ops::indexing::IndexOp;
-                        let sliced = full_mask.index((offset..offset + seq_len, ..));
-                        owned_mask = AttentionMask::Array(sliced);
-                        &owned_mask
-                    }
+                    // Match Python mlx-vlm: rely on SDPA's built-in causal path for
+                    // cached decode instead of materializing a sliced additive mask.
+                    owned_mask = AttentionMask::Causal;
+                    &owned_mask
                 }
             }
         };
