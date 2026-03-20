@@ -1,6 +1,6 @@
 use mlx_rs::{error::Exception, transforms, with_new_default_stream, Array, Stream};
 use mlx_rs::ops::{self, indexing::IndexOp};
-use mlx_lm::cache::KeyValueCache;
+use crate::cache::KeyValueCache;
 
 use crate::cache::KVCache;
 use crate::full_model::Model;

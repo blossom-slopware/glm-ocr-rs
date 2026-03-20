@@ -5,7 +5,7 @@ use mlx_rs::{
     module::Module,
     nn, Array,
 };
-use mlx_lm::cache::KeyValueCache;
+use crate::cache::KeyValueCache;
 
 use crate::config::TextConfig;
 use super::AttentionMask;
