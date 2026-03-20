@@ -5,8 +5,9 @@ use mlx_rs::{
     module::Module,
     nn, Array,
 };
-use mlx_lm::cache::{ConcatKeyValueCache, KeyValueCache};
+use mlx_lm::cache::KeyValueCache;
 
+use crate::cache::KVCache;
 use crate::config::TextConfig;
 use super::text_model::GlmOcrTextModel;
 
@@ -96,7 +97,7 @@ impl GlmOcrModel {
     }
 
     /// Create a cache vector for this model with initialized entries.
-    pub fn new_cache(&self) -> Vec<Option<ConcatKeyValueCache>> {
-        (0..self.num_layers).map(|_| Some(ConcatKeyValueCache::new())).collect()
+    pub fn new_cache(&self) -> Vec<Option<KVCache>> {
+        (0..self.num_layers).map(|_| Some(KVCache::new())).collect()
     }
 }

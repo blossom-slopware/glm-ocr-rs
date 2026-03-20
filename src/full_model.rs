@@ -3,8 +3,7 @@ use std::path::Path;
 use mlx_rs::{error::Exception, Array, Dtype};
 use mlx_rs::module::Module;
 use mlx_rs::ops::{self, indexing::IndexOp};
-use mlx_lm::cache::ConcatKeyValueCache;
-
+use crate::cache::KVCache;
 use crate::config::FullConfig;
 use crate::model::language_model::GlmOcrModel;
 use crate::vision::vision_model::{VisionTower, VisionModelInput};
@@ -48,7 +47,7 @@ impl Model {
         })
     }
 
-    pub fn new_cache(&self) -> Vec<Option<ConcatKeyValueCache>> {
+    pub fn new_cache(&self) -> Vec<Option<KVCache>> {
         self.language_model.new_cache()
     }
 
@@ -427,7 +426,7 @@ impl Model {
         pixel_values: Option<&Array>,
         image_grid_thw: Option<&[(i32, i32, i32)]>,
         mask: Option<&Array>,
-        cache: &mut [Option<ConcatKeyValueCache>],
+        cache: &mut [Option<KVCache>],
         cache_offset: i32,
     ) -> Result<Array, Exception> {
         if pixel_values.is_some() {

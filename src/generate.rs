@@ -1,7 +1,8 @@
 use mlx_rs::{error::Exception, transforms, with_new_default_stream, Array, Stream};
 use mlx_rs::ops::{self, indexing::IndexOp};
-use mlx_lm::cache::{ConcatKeyValueCache, KeyValueCache};
+use mlx_lm::cache::KeyValueCache;
 
+use crate::cache::KVCache;
 use crate::full_model::Model;
 use crate::ocr::abort::AbortSignal;
 use crate::sampler;
@@ -48,7 +49,7 @@ pub struct GenerateSummary {
 }
 
 pub struct GenerateState {
-    pub cache: Vec<Option<ConcatKeyValueCache>>,
+    pub cache: Vec<Option<KVCache>>,
     pub generated_tokens: Vec<i32>,
     pub stream: Stream,
 }
@@ -114,24 +115,6 @@ fn step(
     Ok((y, logprobs))
 }
 
-fn eval_cache(cache: &[Option<ConcatKeyValueCache>]) -> Result<(), Exception> {
-    let mut arrays = Vec::new();
-    for layer_cache in cache {
-        if let Some(layer_cache) = layer_cache {
-            if let Some(keys) = layer_cache.keys() {
-                arrays.push(keys);
-            }
-            if let Some(values) = layer_cache.values() {
-                arrays.push(values);
-            }
-        }
-    }
-    if arrays.is_empty() {
-        Ok(())
-    } else {
-        transforms::eval(arrays)
-    }
-}
 
 pub fn prefill(
     model: &mut Model,
@@ -164,7 +147,6 @@ pub fn prefill(
 
             let logits = model.language_model.forward_with_embeds(&chunk_embeds, &chunk_pos, &mut cache)?;
             logits.eval()?;
-            eval_cache(&cache)?;
             processed = chunk_end;
 
             if processed % (config.prefill_step_size * 2) == 0 {
@@ -223,7 +205,6 @@ pub fn decode_next(
         let (next_y, _next_logprobs) = step(&logits, &state.generated_tokens, config)?;
         transforms::async_eval([&next_y])?;
         next_y.eval()?;
-        eval_cache(&state.cache)?;
         let next_token_id = next_y.item::<i32>();
         state.generated_tokens.push(next_token_id);
         Ok::<_, GenerateError>(next_token_id)
