@@ -8,6 +8,7 @@ use crate::image_processor::{self, ImageProcessor};
 use crate::tokenizer::{self, GlmTokenizer};
 
 use super::abort::AbortSignal;
+use super::error::EngineError;
 use super::request::{ImageSource, OcrRequest, OcrRunResult, StopReason};
 
 /// Default OCR instruction prompt.
@@ -49,7 +50,9 @@ impl TpsLogger {
             let interval_tps = self.interval_tokens as f64 / elapsed.as_secs_f64();
             log::info!(
                 "Generating: {} tokens so far ({:.1} tok/s overall, {:.1} tok/s recent)",
-                self.total_tokens, overall_tps, interval_tps
+                self.total_tokens,
+                overall_tps,
+                interval_tps
             );
             self.last_log = now;
             self.interval_tokens = 0;
@@ -67,7 +70,10 @@ impl TpsLogger {
         };
         log::info!(
             "Generation completed: {} tokens in {}ms ({:.1} tok/s) stop_reason={:?}",
-            self.total_tokens, ms, tps, stop_reason
+            self.total_tokens,
+            ms,
+            tps,
+            stop_reason
         );
     }
 }
@@ -91,21 +97,27 @@ impl OcrEngine {
         req: &OcrRequest,
         abort: &AbortSignal,
         mut on_text_chunk: impl FnMut(String),
-    ) -> OcrRunResult {
+    ) -> Result<OcrRunResult, EngineError> {
+        let effective_max_tokens = req.validate()?;
         let total_start = Instant::now();
 
         // ── 1. Load image bytes ──
         let load_start = Instant::now();
         let img_bytes = match &req.image {
             ImageSource::Url { url } => {
-                log::debug!("Loading image from: {}", if url.starts_with("data:") {
-                    format!("data:...({} bytes)", url.len())
-                } else if url.len() > 120 {
-                    format!("{}...", &url[..120])
-                } else {
-                    url.clone()
-                });
-                image_processor::load_image_bytes(url)
+                log::debug!(
+                    "Loading image from: {}",
+                    if url.starts_with("data:") {
+                        format!("data:...({} bytes)", url.len())
+                    } else if url.len() > 120 {
+                        format!("{}...", &url[..120])
+                    } else {
+                        url.clone()
+                    }
+                );
+                image_processor::load_image_bytes(url).map_err(|source| EngineError::ImageLoad {
+                    source: source.context("failed while loading image source"),
+                })?
             }
             ImageSource::Bytes(bytes) => {
                 log::debug!("Using provided image bytes: {} bytes", bytes.len());
@@ -117,31 +129,49 @@ impl OcrEngine {
 
         // ── 2. Preprocess image ──
         let preprocess_start = Instant::now();
-        let (pixel_values, grid_thw) = self.image_processor.preprocess(&img_bytes)
-            .unwrap_or_else(|e| panic!("Image preprocessing failed: {}", e));
+        let (pixel_values, grid_thw) = self
+            .image_processor
+            .preprocess(&img_bytes)
+            .map_err(|source| {
+                let message = format!("{source:#}");
+                if message.contains("failed to decode image bytes") {
+                    EngineError::ImageDecode { source }
+                } else {
+                    EngineError::Preprocess { source }
+                }
+            })?;
         let preprocess_ms = preprocess_start.elapsed().as_millis();
         log::info!(
             "Image preprocessed: grid_thw=({},{},{}) pixel_values shape={:?} in {}ms",
-            grid_thw.0, grid_thw.1, grid_thw.2, pixel_values.shape(), preprocess_ms
+            grid_thw.0,
+            grid_thw.1,
+            grid_thw.2,
+            pixel_values.shape(),
+            preprocess_ms
         );
 
         // ── 3. Build prompt via chat template ──
         let tokenize_start = Instant::now();
-        let user_prompt = req.prompt.as_deref().unwrap_or(DEFAULT_OCR_PROMPT);
-        let messages = serde_json::json!([{
+        let user_prompt = match req.prompt.as_deref() {
+            Some(s) if !s.trim().is_empty() => s,
+            _ => DEFAULT_OCR_PROMPT,
+        };
+        let messages = vec![serde_json::json!({
             "role": "user",
             "content": [
                 {"type": "image", "image": "placeholder"},
                 {"type": "text", "text": user_prompt}
             ]
-        }]);
-        let messages_arr = messages.as_array().unwrap();
+        })];
         let prompt_text = tokenizer::render_chat_template(
             &self.template_str,
-            messages_arr,
+            &messages,
             true,  // add_generation_prompt
             false, // enable_thinking = false for OCR
-        );
+        )
+        .map_err(|source| EngineError::PromptRender {
+            source: source.context("failed to render OCR prompt template"),
+        })?;
         log::debug!("Rendered chat template ({} chars)", prompt_text.len());
         log::trace!("Template output:\n{}", prompt_text);
 
@@ -151,13 +181,26 @@ impl OcrEngine {
             / (merge_size as usize * merge_size as usize);
         log::debug!(
             "Image token expansion: grid=({},{},{}) merge_size={} → {} tokens",
-            grid_thw.0, grid_thw.1, grid_thw.2, merge_size, num_image_tokens
+            grid_thw.0,
+            grid_thw.1,
+            grid_thw.2,
+            merge_size,
+            num_image_tokens
         );
 
-        let input_ids = self.tokenizer.encode(&prompt_text, &[num_image_tokens]);
+        let input_ids = self
+            .tokenizer
+            .encode(&prompt_text, &[num_image_tokens])
+            .map_err(|source| EngineError::Tokenization {
+                source: source.context("failed to tokenize OCR prompt"),
+            })?;
         let prompt_tokens = input_ids.len();
         let tokenize_ms = tokenize_start.elapsed().as_millis();
-        log::info!("Tokenization completed in {}ms → {} prompt tokens", tokenize_ms, prompt_tokens);
+        log::info!(
+            "Tokenization completed in {}ms → {} prompt tokens",
+            tokenize_ms,
+            prompt_tokens
+        );
 
         // ── 5. Build MLX arrays ──
         let input_ids_arr = Array::from_slice(&input_ids, &[1, input_ids.len() as i32]);
@@ -167,15 +210,20 @@ impl OcrEngine {
         log::debug!("EOS tokens: {:?}", eos_tokens);
 
         let config = GenerateConfig {
-            max_tokens: req.max_tokens,
+            max_tokens: effective_max_tokens,
             temperature: req.temperature,
             stop_tokens: eos_tokens.clone(),
             ..Default::default()
         };
         log::debug!(
             "GenerateConfig: max_tokens={} temp={} top_p={} top_k={} min_p={} rep_penalty={} prefill_step={}",
-            config.max_tokens, config.temperature, config.top_p,
-            config.top_k, config.min_p, config.repetition_penalty, config.prefill_step_size
+            config.max_tokens,
+            config.temperature,
+            config.top_p,
+            config.top_k,
+            config.min_p,
+            config.repetition_penalty,
+            config.prefill_step_size
         );
 
         // ── 6. Generate with streaming decode ──
@@ -196,7 +244,6 @@ impl OcrEngine {
             &config,
             abort,
             |token_id| {
-                // Check abort in callback
                 if abort_clone.is_set() {
                     return Err(GenerateError::Aborted);
                 }
@@ -215,12 +262,19 @@ impl OcrEngine {
                         chunk_count += 1;
                         log::trace!(
                             "Chunk #{} token_id={} text={:?}",
-                            chunk_count, token_id, text_chunk
+                            chunk_count,
+                            token_id,
+                            text_chunk
                         );
                         on_text_chunk(text_chunk);
                     }
                     Ok(Some(_)) | Ok(None) => {}
-                    Err(e) => panic!("Streaming decode failed: {}", e),
+                    Err(e) => {
+                        return Err(GenerateError::Other(anyhow::anyhow!(
+                            "stream decode failed: {}",
+                            e
+                        )));
+                    }
                 }
 
                 Ok(())
@@ -240,24 +294,44 @@ impl OcrEngine {
             Err(GenerateError::Aborted) => {
                 log::info!(
                     "Generation aborted after {} tokens for image: {}",
-                    generated_token_ids.len(), req.image_description()
+                    generated_token_ids.len(),
+                    req.image_description()
                 );
                 (generated_token_ids.len(), StopReason::Aborted)
             }
-            Err(GenerateError::Mlx(e)) => {
-                panic!("Generation failed: {}", e);
+            Err(GenerateError::Mlx(source)) => {
+                return Err(EngineError::Generation {
+                    source: anyhow::Error::new(source).context("MLX generation error"),
+                });
+            }
+            Err(GenerateError::Other(source)) => {
+                return Err(EngineError::StreamDecode {
+                    source: source.context("stream decoder callback failed"),
+                });
+            }
+            Err(GenerateError::StateInvariant(message)) => {
+                return Err(EngineError::StateInvariant {
+                    code: "generation_state_invariant",
+                    message,
+                });
             }
         };
 
         tps.finish(&stop_reason);
 
         // ── 8. Final flush — emit any remaining decoded text ──
-        let final_text = self.tokenizer.decode(&generated_token_ids, true);
-        assert!(
-            final_text.starts_with(&emitted_text),
-            "Streaming decode prefix mismatch: emitted={:?} final={:?}",
-            emitted_text, final_text
-        );
+        let final_text = self
+            .tokenizer
+            .decode(&generated_token_ids, true)
+            .map_err(|source| EngineError::Tokenization {
+                source: source.context("failed to decode final generated text"),
+            })?;
+        if !final_text.starts_with(&emitted_text) {
+            return Err(EngineError::StateInvariant {
+                code: "stream_decode_prefix_mismatch",
+                message: "stream decode output is not a prefix of final decode".to_string(),
+            });
+        }
         let remaining_text = &final_text[emitted_text.len()..];
         if !remaining_text.is_empty() {
             chunk_count += 1;
@@ -268,14 +342,18 @@ impl OcrEngine {
         let total_ms = total_start.elapsed().as_millis();
         log::info!(
             "OCR request completed: {} prompt + {} gen tokens, {} chunks in {}ms (preprocess={}ms, tokenize={}ms)",
-            prompt_tokens, summary_tokens, chunk_count, total_ms,
-            preprocess_ms, tokenize_ms
+            prompt_tokens,
+            summary_tokens,
+            chunk_count,
+            total_ms,
+            preprocess_ms,
+            tokenize_ms
         );
 
-        OcrRunResult {
+        Ok(OcrRunResult {
             text: final_text,
             generated_tokens: summary_tokens,
             stop_reason,
-        }
+        })
     }
 }

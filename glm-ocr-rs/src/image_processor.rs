@@ -1,6 +1,6 @@
-use mlx_rs::error::Exception;
-use mlx_rs::ops;
+use anyhow::{Context, ensure};
 use mlx_rs::Array;
+use mlx_rs::ops;
 use serde::Deserialize;
 
 /// Image processor config from preprocessor_config.json.
@@ -31,13 +31,13 @@ struct PreprocessorConfig {
 }
 
 impl ImageProcessor {
-    pub fn from_config(model_dir: &str) -> Self {
-        let path = format!("{}/preprocessor_config.json", model_dir);
+    pub fn from_config(model_dir: &str) -> anyhow::Result<Self> {
+        let path = format!("{model_dir}/preprocessor_config.json");
         let f = std::fs::File::open(&path)
-            .unwrap_or_else(|e| panic!("Failed to open {}: {}", path, e));
+            .with_context(|| format!("failed to open {path}"))?;
         let cfg: PreprocessorConfig = serde_json::from_reader(f)
-            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path, e));
-        Self {
+            .with_context(|| format!("failed to parse {path}"))?;
+        Ok(Self {
             patch_size: cfg.patch_size,
             temporal_patch_size: cfg.temporal_patch_size,
             merge_size: cfg.merge_size,
@@ -45,15 +45,15 @@ impl ImageProcessor {
             max_pixels: cfg.size.longest_edge,
             image_mean: [cfg.image_mean[0], cfg.image_mean[1], cfg.image_mean[2]],
             image_std: [cfg.image_std[0], cfg.image_std[1], cfg.image_std[2]],
-        }
+        })
     }
 
     /// Preprocess an image from raw bytes.
     /// Returns (pixel_values [N, 1176], (grid_t, grid_h, grid_w)).
-    pub fn preprocess(&self, img_bytes: &[u8]) -> Result<(Array, (i32, i32, i32)), Exception> {
+    pub fn preprocess(&self, img_bytes: &[u8]) -> anyhow::Result<(Array, (i32, i32, i32))> {
         // Load image, convert to RGB
         let img = image::load_from_memory(img_bytes)
-            .unwrap_or_else(|e| panic!("Failed to load image: {}", e))
+            .context("failed to decode image bytes")?
             .to_rgb8();
 
         let (orig_w, orig_h) = (img.width(), img.height());
@@ -67,7 +67,7 @@ impl ImageProcessor {
             (self.patch_size * self.merge_size) as u32,
             self.min_pixels,
             self.max_pixels,
-        );
+        )?;
 
         // Resize with BICUBIC (CatmullRom)
         let resized = image::imageops::resize(
@@ -146,28 +146,26 @@ pub fn smart_resize(
     factor: u32,
     min_pixels: u64,
     max_pixels: u64,
-) -> (u32, u32) {
-    assert!(
+) -> anyhow::Result<(u32, u32)> {
+    ensure!(
         num_frames >= temporal_factor,
-        "t:{} must be larger than temporal_factor:{}",
-        num_frames,
-        temporal_factor
+        "t:{num_frames} must be larger than temporal_factor:{temporal_factor}"
     );
 
     let mut height_f = height as f64;
     let mut width_f = width as f64;
     let factor_f = factor as f64;
 
-    if (height_f) < factor_f || (width_f) < factor_f {
+    if height_f < factor_f || width_f < factor_f {
         let scale = f64::max(factor_f / height_f, factor_f / width_f);
         height_f = (height_f * scale).floor();
         width_f = (width_f * scale).floor();
     }
 
-    assert!(
-        f64::max(height_f, width_f) / f64::min(height_f, width_f) <= 200.0,
-        "absolute aspect ratio must be smaller than 200, got {}",
-        f64::max(height_f, width_f) / f64::min(height_f, width_f)
+    let aspect_ratio = f64::max(height_f, width_f) / f64::min(height_f, width_f);
+    ensure!(
+        aspect_ratio <= 200.0,
+        "absolute aspect ratio must be smaller than 200, got {aspect_ratio}"
     );
 
     let mut h_bar = (height_f / factor_f).round() as u32 * factor;
@@ -184,26 +182,28 @@ pub fn smart_resize(
         w_bar = (width_f * beta / factor_f).ceil() as u32 * factor;
     }
 
-    (h_bar, w_bar)
+    Ok((h_bar, w_bar))
 }
 
 /// Load image bytes from various URL formats.
-pub fn load_image_bytes(url: &str) -> Vec<u8> {
+pub fn load_image_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
     if url.starts_with("data:") {
         // data:image/png;base64,<data>
         let comma_pos = url.find(',')
-            .unwrap_or_else(|| panic!("Invalid data URL: no comma found"));
+            .context("invalid data URL: no comma found")?;
         let b64_data = &url[comma_pos + 1..];
         use base64::Engine;
         base64::engine::general_purpose::STANDARD
             .decode(b64_data)
-            .unwrap_or_else(|e| panic!("Failed to decode base64 image: {}", e))
+            .context("failed to decode base64 image")
     } else if url.starts_with("http://") || url.starts_with("https://") {
         let resp = reqwest::blocking::get(url)
-            .unwrap_or_else(|e| panic!("Failed to fetch image from {}: {}", url, e));
-        resp.bytes()
-            .unwrap_or_else(|e| panic!("Failed to read image bytes from {}: {}", url, e))
-            .to_vec()
+            .with_context(|| format!("failed to fetch image from {url}"))?
+            .error_for_status()
+            .with_context(|| format!("image request returned error status for {url}"))?;
+        let bytes = resp.bytes()
+            .with_context(|| format!("failed to read image bytes from {url}"))?;
+        Ok(bytes.to_vec())
     } else {
         // Local file path
         let path = if url.starts_with("file://") {
@@ -212,6 +212,6 @@ pub fn load_image_bytes(url: &str) -> Vec<u8> {
             url
         };
         std::fs::read(path)
-            .unwrap_or_else(|e| panic!("Failed to read image file {}: {}", path, e))
+            .with_context(|| format!("failed to read image file {path}"))
     }
 }

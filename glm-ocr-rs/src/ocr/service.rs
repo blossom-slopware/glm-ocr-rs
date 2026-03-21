@@ -1,98 +1,157 @@
-use std::sync::Arc;
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use super::abort::AbortSignal;
 use super::engine::OcrEngine;
+use super::error::{EngineError, OcrError, ServiceStateKind, ServiceStatusSnapshot};
 use super::request::{OcrRequest, OcrRunResult};
 
-/// Tracks one in-flight request.
-struct ActiveRequest {
-    abort: AbortSignal,
-}
-
-struct ActiveRequestGuard {
-    active: Arc<Mutex<Option<ActiveRequest>>>,
-}
-
-impl Drop for ActiveRequestGuard {
-    fn drop(&mut self) {
-        let mut active_guard = self.active.blocking_lock();
-        *active_guard = None;
-    }
-}
-
-/// Error type for the OCR service layer.
-#[derive(Debug)]
-pub enum OcrError {
+enum ServiceState {
+    Idle,
     Busy,
-    Internal(String),
-}
-
-impl std::fmt::Display for OcrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OcrError::Busy => write!(f, "Server is busy with another request"),
-            OcrError::Internal(msg) => write!(f, "Internal error: {}", msg),
-        }
-    }
+    Faulted {
+        reason: &'static str,
+    },
 }
 
 /// Single-active-request controller wrapping the OCR engine.
 pub struct OcrService {
     engine: Arc<Mutex<OcrEngine>>,
-    active: Arc<Mutex<Option<ActiveRequest>>>,
+    state: Arc<Mutex<ServiceState>>,
 }
 
 impl OcrService {
     pub fn new(engine: OcrEngine) -> Self {
-        OcrService {
+        Self {
             engine: Arc::new(Mutex::new(engine)),
-            active: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(ServiceState::Idle)),
         }
     }
 
-    /// Run an OCR request. Rejects with `OcrError::Busy` if a request is already in progress.
+    /// Run an OCR request. Rejects when the service is busy or faulted.
     ///
-    /// The caller provides the `AbortSignal` and is responsible for setting it on client
-    /// disconnect. The active request slot is cleared automatically when the blocking task
-    /// finishes.
-    ///
-    /// Returns a `JoinHandle` for the blocking generation task.
-    pub async fn run(
+    /// Returns a JoinHandle for the blocking generation task.
+    pub fn run(
         &self,
         req: OcrRequest,
         abort: AbortSignal,
         on_text_chunk: impl FnMut(String) + Send + 'static,
-    ) -> Result<tokio::task::JoinHandle<OcrRunResult>, OcrError> {
-        // Check if busy and register active request atomically
+    ) -> Result<JoinHandle<Result<OcrRunResult, OcrError>>, OcrError> {
         {
-            let mut active = self.active.lock().await;
-            if active.is_some() {
-                return Err(OcrError::Busy);
+            let mut state = lock_service_state(&self.state);
+            match &*state {
+                ServiceState::Idle => {
+                    *state = ServiceState::Busy;
+                }
+                ServiceState::Busy => {
+                    return Err(OcrError::Busy);
+                }
+                ServiceState::Faulted { reason } => {
+                    return Err(OcrError::Faulted { reason });
+                }
             }
-            *active = Some(ActiveRequest {
-                abort: abort.clone(),
-            });
         }
 
-        // Run generation in blocking task
-        let engine = self.engine.clone();
-        let active = self.active.clone();
+        let engine = Arc::clone(&self.engine);
+        let state = Arc::clone(&self.state);
 
         let handle = tokio::task::spawn_blocking(move || {
-            let _active_guard = ActiveRequestGuard {
-                active: active.clone(),
-            };
-            let mut engine = engine.blocking_lock();
-            engine.run(&req, &abort, on_text_chunk)
+            let run_result = run_engine_request(&engine, &req, &abort, on_text_chunk);
+            finalize_request_state(&state, &run_result);
+            run_result.map_err(OcrError::from)
         });
 
         Ok(handle)
     }
 
-    /// Check if a request is currently in progress.
-    pub async fn is_busy(&self) -> bool {
-        self.active.lock().await.is_some()
+    pub fn status(&self) -> ServiceStatusSnapshot {
+        let state = lock_service_state(&self.state);
+        match &*state {
+            ServiceState::Idle => ServiceStatusSnapshot {
+                state: ServiceStateKind::Idle,
+                fault_reason: None,
+            },
+            ServiceState::Busy => ServiceStatusSnapshot {
+                state: ServiceStateKind::Busy,
+                fault_reason: None,
+            },
+            ServiceState::Faulted { reason } => ServiceStatusSnapshot {
+                state: ServiceStateKind::Faulted,
+                fault_reason: Some(reason),
+            },
+        }
+    }
+
+    pub fn is_busy(&self) -> bool {
+        matches!(self.status().state, ServiceStateKind::Busy)
+    }
+}
+
+fn run_engine_request(
+    engine: &Arc<Mutex<OcrEngine>>,
+    req: &OcrRequest,
+    abort: &AbortSignal,
+    on_text_chunk: impl FnMut(String),
+) -> Result<OcrRunResult, EngineError> {
+    let mut engine = match engine.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return Err(EngineError::StateInvariant {
+                code: "engine_mutex_poisoned",
+                message: "engine mutex is poisoned".to_string(),
+            });
+        }
+    };
+
+    match panic::catch_unwind(AssertUnwindSafe(|| engine.run(req, abort, on_text_chunk))) {
+        Ok(result) => result,
+        Err(payload) => Err(EngineError::WorkerPanic {
+            message: panic_payload_to_string(payload),
+        }),
+    }
+}
+
+fn finalize_request_state(
+    state: &Arc<Mutex<ServiceState>>,
+    result: &Result<OcrRunResult, EngineError>,
+) {
+    let mut state_guard = lock_service_state(state);
+    *state_guard = match result {
+        Ok(_) => ServiceState::Idle,
+        Err(error) if error.should_fault_service() => {
+            let reason = error.fault_reason().unwrap_or("internal_error");
+            log::error!(
+                "OCR request faulted service (reason={}): {:?}",
+                reason,
+                error
+            );
+            ServiceState::Faulted { reason }
+        }
+        Err(error) => {
+            log::warn!("OCR request failed without faulting service: {:?}", error);
+            ServiceState::Idle
+        }
+    };
+}
+
+fn lock_service_state(state: &Arc<Mutex<ServiceState>>) -> MutexGuard<'_, ServiceState> {
+    match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("Service state mutex is poisoned; recovering state lock");
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
     }
 }

@@ -53,11 +53,13 @@ pub struct GenerateState {
     pub stream: Stream,
 }
 
-/// Error type for generation — supports abort and MLX errors.
+/// Error type for generation — supports abort, MLX errors, and internal state violations.
 #[derive(Debug)]
 pub enum GenerateError {
     Aborted,
     Mlx(Exception),
+    Other(anyhow::Error),
+    StateInvariant(String),
 }
 
 impl From<Exception> for GenerateError {
@@ -71,6 +73,8 @@ impl std::fmt::Display for GenerateError {
         match self {
             GenerateError::Aborted => write!(f, "Generation aborted"),
             GenerateError::Mlx(e) => write!(f, "MLX error: {}", e),
+            GenerateError::Other(e) => write!(f, "Generation callback error: {e:#}"),
+            GenerateError::StateInvariant(message) => write!(f, "State invariant violated: {}", message),
         }
     }
 }
@@ -195,7 +199,11 @@ pub fn decode_next(
 
     with_new_default_stream(state.stream.clone(), || {
         let cache_offset = state.cache[0].offset();
-        let current_token = *state.generated_tokens.last().unwrap();
+        let current_token = *state.generated_tokens.last().ok_or_else(|| {
+            GenerateError::StateInvariant(
+                "generated token buffer is empty before decode step".to_string(),
+            )
+        })?;
 
         let y_input = Array::from_int(current_token).reshape(&[1, 1])?;
         let decode_pos = model.compute_position_ids(&y_input, cache_offset)?;

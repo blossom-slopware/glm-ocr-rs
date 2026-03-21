@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context;
+
 use glm_ocr_rs::full_model::Model;
 use glm_ocr_rs::image_processor::ImageProcessor;
 use glm_ocr_rs::ocr::{OcrEngine, OcrService};
@@ -47,26 +49,26 @@ fn parse_args() -> Args {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args = parse_args();
 
     log::info!("Loading model from {}", args.model_dir);
     let model = Model::load(&args.model_dir)
-        .unwrap_or_else(|e| panic!("Failed to load model: {}", e));
+        .map_err(|e| anyhow::anyhow!("failed to load model from {}: {}", args.model_dir, e))?;
 
     let tokenizer_path = format!("{}/tokenizer.json", args.model_dir);
     log::info!("Loading tokenizer from {}", tokenizer_path);
-    let tokenizer = GlmTokenizer::from_file(&tokenizer_path);
+    let tokenizer = GlmTokenizer::from_file(&tokenizer_path)?;
 
     let template_path = format!("{}/chat_template.jinja", args.model_dir);
     log::info!("Loading chat template from {}", template_path);
     let template_str = std::fs::read_to_string(&template_path)
-        .unwrap_or_else(|e| panic!("Failed to read chat template {}: {}", template_path, e));
+        .with_context(|| format!("failed to read chat template {}", template_path))?;
 
     log::info!("Loading image processor config");
-    let image_processor = ImageProcessor::from_config(&args.model_dir);
+    let image_processor = ImageProcessor::from_config(&args.model_dir)?;
 
     let model_name = args.model_dir.clone();
 
@@ -83,15 +85,19 @@ async fn main() {
         model_name,
     });
 
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()
-        .unwrap_or_else(|e| panic!("Invalid address {}:{}: {}", args.host, args.port, e));
+    let addr: SocketAddr = format!("{}:{}", args.host, args.port)
+        .parse()
+        .with_context(|| format!("invalid address {}:{}", args.host, args.port))?;
     log::info!("Starting GLM-OCR server on {}", addr);
 
     let app = build_router(state);
-    let listener = tokio::net::TcpListener::bind(addr).await
-        .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", addr, e));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind to {}", addr))?;
 
     log::info!("Server ready. Listening on http://{}", addr);
-    axum::serve(listener, app).await
-        .unwrap_or_else(|e| panic!("Server error: {}", e));
+    axum::serve(listener, app)
+        .await
+        .context("server exited with an error")?;
+    Ok(())
 }

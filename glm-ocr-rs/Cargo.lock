@@ -783,6 +783,7 @@ dependencies = [
 name = "glm-ocr-rs"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "base64 0.22.1",
  "env_logger",
@@ -796,6 +797,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
  "tokenizers",
  "tokio",
  "tokio-stream",
