@@ -37,6 +37,15 @@ impl ImageProcessor {
             .with_context(|| format!("failed to open {path}"))?;
         let cfg: PreprocessorConfig = serde_json::from_reader(f)
             .with_context(|| format!("failed to parse {path}"))?;
+        assert!(
+            cfg.image_mean.len() >= 3,
+            "image_mean must have at least 3 elements"
+        );
+        assert!(
+            cfg.image_std.len() >= 3,
+            "image_std must have at least 3 elements"
+        );
+
         Ok(Self {
             patch_size: cfg.patch_size,
             temporal_patch_size: cfg.temporal_patch_size,

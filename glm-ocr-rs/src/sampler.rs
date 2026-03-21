@@ -13,7 +13,7 @@ pub fn apply_top_p(logprobs: &Array, top_p: f32) -> Result<Array, Exception> {
     let cumulative_probs = ops::cumsum(&sorted_probs, Some(-1), None, None)?;
 
     // Compute inverse permutation to map cumulative probs back to original order
-    let num_classes = logprobs.shape().last().copied().unwrap_or(1);
+    let num_classes = logprobs.shape().last().copied().expect("logprobs must have at least 1 dimension");
     let arange = ops::arange::<_, i32>(0, num_classes, None)?;
     let inverse_indices = put_along_axis(&arange.reshape(&[-1])?, &sorted_indices, &arange.reshape(&[-1])?, -1)?;
     // Broadcast: expand arange to match batch dims
@@ -50,7 +50,7 @@ pub fn apply_min_p(logprobs: &Array, min_p: f32, min_tokens_to_keep: i32) -> Res
 
     // Always keep at least min_tokens_to_keep
     let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
-    let num_classes = logprobs.shape().last().copied().unwrap_or(1);
+    let num_classes = logprobs.shape().last().copied().expect("logprobs must have at least 1 dimension");
 
     // Build mask: set first min_tokens_to_keep positions to false (keep them)
     let keep_mask = if min_tokens_to_keep > 0 {
@@ -88,7 +88,7 @@ pub fn apply_top_k(logprobs: &Array, top_k: i32) -> Result<Array, Exception> {
     let partitioned_indices = ops::argpartition_axis(&neg_logprobs, top_k - 1, -1)?;
 
     // Indices beyond top_k are the ones to mask
-    let num_classes = logprobs.shape().last().copied().unwrap_or(1);
+    let num_classes = logprobs.shape().last().copied().expect("logprobs must have at least 1 dimension");
     let mask_indices = partitioned_indices.index((.., top_k..num_classes));
 
     let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;

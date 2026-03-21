@@ -43,7 +43,7 @@ impl TextConfig {
         self.rope_parameters
             .get("mrope_section")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().map(|v| v.as_i64().unwrap() as i32).collect())
+            .map(|arr| arr.iter().map(|v| v.as_i64().expect("mrope_section elements must be integers") as i32).collect())
             .unwrap_or_else(|| vec![16, 24, 24])
     }
 

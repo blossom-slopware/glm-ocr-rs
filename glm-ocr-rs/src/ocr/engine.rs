@@ -12,8 +12,7 @@ use super::error::EngineError;
 use super::request::{ImageSource, OcrRequest, OcrRunResult, StopReason};
 
 /// Default OCR instruction prompt.
-pub const DEFAULT_OCR_PROMPT: &str =
-    "Recognize the text in the image and output in Markdown format. \
+pub const DEFAULT_OCR_PROMPT: &str = "Recognize the text in the image and output in Markdown format. \
      Preserve the original layout (headings/paragraphs/tables/formulas). \
      Do not fabricate content that does not exist in the image.";
 
@@ -46,12 +45,10 @@ impl TpsLogger {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_log);
         if elapsed >= self.log_interval {
-            let overall_tps = self.total_tokens as f64 / now.duration_since(self.start).as_secs_f64();
             let interval_tps = self.interval_tokens as f64 / elapsed.as_secs_f64();
             log::info!(
-                "Generating: {} tokens so far ({:.1} tok/s overall, {:.1} tok/s recent)",
+                "Generated {} tokens, {:.1} tok/s",
                 self.total_tokens,
-                overall_tps,
                 interval_tps
             );
             self.last_log = now;
@@ -129,17 +126,17 @@ impl OcrEngine {
 
         // ── 2. Preprocess image ──
         let preprocess_start = Instant::now();
-        let (pixel_values, grid_thw) = self
-            .image_processor
-            .preprocess(&img_bytes)
-            .map_err(|source| {
-                let message = format!("{source:#}");
-                if message.contains("failed to decode image bytes") {
-                    EngineError::ImageDecode { source }
-                } else {
-                    EngineError::Preprocess { source }
-                }
-            })?;
+        let (pixel_values, grid_thw) =
+            self.image_processor
+                .preprocess(&img_bytes)
+                .map_err(|source| {
+                    let message = format!("{source:#}");
+                    if message.contains("failed to decode image bytes") {
+                        EngineError::ImageDecode { source }
+                    } else {
+                        EngineError::Preprocess { source }
+                    }
+                })?;
         let preprocess_ms = preprocess_start.elapsed().as_millis();
         log::info!(
             "Image preprocessed: grid_thw=({},{},{}) pixel_values shape={:?} in {}ms",
@@ -335,7 +332,11 @@ impl OcrEngine {
         let remaining_text = &final_text[emitted_text.len()..];
         if !remaining_text.is_empty() {
             chunk_count += 1;
-            log::trace!("Final flush chunk #{} text={:?}", chunk_count, remaining_text);
+            log::trace!(
+                "Final flush chunk #{} text={:?}",
+                chunk_count,
+                remaining_text
+            );
             on_text_chunk(remaining_text.to_string());
         }
 
