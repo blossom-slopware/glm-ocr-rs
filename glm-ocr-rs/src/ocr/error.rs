@@ -134,6 +134,51 @@ impl OcrError {
             Self::Internal { message, .. } => message,
         }
     }
+
+    /// Convert an `EngineError` reference to `OcrError` without consuming it.
+    /// Uses the same mapping as `From<EngineError>`.
+    pub fn from_engine_error_ref(error: &EngineError) -> Self {
+        match error {
+            EngineError::Aborted => Self::Aborted,
+            EngineError::InvalidRequest { code, message } => Self::BadRequest { code, message },
+            EngineError::ImageLoad { .. } => Self::BadRequest {
+                code: "image_load_failed",
+                message: "failed to load input image",
+            },
+            EngineError::ImageDecode { .. } => Self::BadRequest {
+                code: "image_decode_failed",
+                message: "failed to decode input image",
+            },
+            EngineError::Preprocess { .. } => Self::Internal {
+                code: "image_preprocess_failed",
+                message: "image preprocessing failed",
+            },
+            EngineError::PromptRender { .. } => Self::Internal {
+                code: "prompt_render_failed",
+                message: "prompt rendering failed",
+            },
+            EngineError::Tokenization { .. } => Self::Internal {
+                code: "tokenization_failed",
+                message: "tokenization failed",
+            },
+            EngineError::StreamDecode { .. } => Self::Internal {
+                code: "stream_decode_failed",
+                message: "stream decode failed",
+            },
+            EngineError::Generation { .. } => Self::Internal {
+                code: "generation_failed",
+                message: "generation failed",
+            },
+            EngineError::StateInvariant { code, .. } => Self::Internal {
+                code,
+                message: "internal state invariant violated",
+            },
+            EngineError::WorkerPanic { .. } => Self::Internal {
+                code: "worker_panicked",
+                message: "internal worker panicked",
+            },
+        }
+    }
 }
 
 impl From<EngineError> for OcrError {

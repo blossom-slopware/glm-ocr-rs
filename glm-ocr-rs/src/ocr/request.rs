@@ -112,7 +112,7 @@ pub enum StopReason {
 }
 
 /// Result of a completed OCR run.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OcrRunResult {
     pub text: String,
     pub generated_tokens: usize,

@@ -111,24 +111,21 @@ async fn ocr_handler(
     let abort = AbortSignal::new();
     let abort_guard = AbortOnDrop::new(abort.clone(), req.image_description());
 
-    let handle = match state.service.run(req, abort, |_chunk| {}) {
-        Ok(handle) => handle,
-        Err(error) => {
-            abort_guard.mark_completed();
-            return Err(map_ocr_error(error));
-        }
-    };
+    let rx = state
+        .service
+        .run(req, abort, |_chunk| {})
+        .map_err(map_ocr_error)?;
 
-    let result = match handle.await {
+    let result = match rx.await {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => {
             abort_guard.mark_completed();
             return Err(map_ocr_error(error));
         }
-        Err(join_error) => {
-            log::error!("OCR worker join failed: {}", join_error);
+        Err(_recv_error) => {
+            log::error!("OCR result channel closed unexpectedly");
             abort_guard.mark_completed();
-            return Err(internal_join_error_response());
+            return Err(internal_channel_error_response());
         }
     };
 
@@ -176,7 +173,7 @@ async fn ocr_stream_handler(
         }
     };
 
-    let handle = state
+    let result_rx = state
         .service
         .run(req, abort.clone(), on_text_chunk)
         .map_err(map_ocr_error)?;
@@ -186,7 +183,7 @@ async fn ocr_stream_handler(
     tokio::spawn(async move {
         let abort_guard = AbortOnDrop::new(abort, image_desc_clone);
 
-        match handle.await {
+        match result_rx.await {
             Ok(Ok(result)) => {
                 let stop_reason_str = stop_reason_label(&result.stop_reason);
                 let done_event = SseDone {
@@ -223,13 +220,13 @@ async fn ocr_stream_handler(
                 .await;
                 abort_guard.mark_completed();
             }
-            Err(join_error) => {
-                log::error!("OCR stream worker join failed: {}", join_error);
+            Err(_recv_error) => {
+                log::error!("OCR stream result channel closed unexpectedly");
                 let _ = send_sse_json(
                     &tx_done,
                     &SseError {
-                        error: "request worker failed",
-                        code: "join_failed",
+                        error: "result channel closed",
+                        code: "channel_closed",
                     },
                 )
                 .await;
@@ -269,13 +266,13 @@ fn map_ocr_error(error: OcrError) -> ApiErrorResponse {
     )
 }
 
-fn internal_join_error_response() -> ApiErrorResponse {
+fn internal_channel_error_response() -> ApiErrorResponse {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         AxumJson(ErrorResponse {
             error: ErrorBody {
-                code: "join_failed",
-                message: "request worker failed",
+                code: "channel_closed",
+                message: "result channel closed unexpectedly",
             },
         }),
     )
