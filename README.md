@@ -2,6 +2,8 @@
 
 Inference only Rust port of GLM-OCR.
 
+> This repo is assisted by Claude, GPT, GLM.
+
 ## Get and Build
 
 ### Prerequisites

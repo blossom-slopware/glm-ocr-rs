@@ -139,6 +139,8 @@ pub fn prefill(
         let seq_len = inputs_embeds.shape()[1];
         let mut processed = 0i32;
 
+        // Chunked prefill: intermediate chunks use prefill_chunk (no lm_head),
+        // only eval KV cache state, and clear memory after each chunk.
         while processed < seq_len - 1 {
             if abort.is_set() {
                 return Err(GenerateError::Aborted);
@@ -148,26 +150,26 @@ pub fn prefill(
             let chunk_embeds = inputs_embeds.index((.., processed..chunk_end, ..));
             let chunk_pos = position_ids.index((.., .., processed..chunk_end));
 
-            let logits = model.language_model.forward_with_embeds(&chunk_embeds, &chunk_pos, &mut cache)?;
-            logits.eval()?;
+            model.language_model.prefill_chunk(&chunk_embeds, &chunk_pos, &mut cache)?;
+            for c in cache.iter() {
+                c.keys().eval()?;
+                c.values().eval()?;
+            }
             processed = chunk_end;
 
-            if processed % (config.prefill_step_size * 2) == 0 {
-                mlx_rs::transforms::compile::clear_cache();
-            }
+            unsafe { mlx_sys::mlx_clear_cache(); }
         }
 
+        // Final chunk: need logits for token sampling
         let last_embeds = inputs_embeds.index((.., processed.., ..));
         let last_pos = position_ids.index((.., .., processed..));
         let logits = model.language_model.forward_with_embeds(&last_embeds, &last_pos, &mut cache)?;
 
+        // Batch-read input_ids into generated_tokens (single GPU→CPU sync)
         input_ids.eval()?;
-        let input_len = input_ids.shape()[1];
-        for j in 0..input_len {
-            let tok = input_ids.index((0, j));
-            tok.eval()?;
-            generated_tokens.push(tok.item::<i32>());
-        }
+        let flat_ids = input_ids.index(0);
+        flat_ids.eval()?;
+        generated_tokens.extend_from_slice(flat_ids.as_slice::<i32>());
 
         let (y, _logprobs) = step(&logits, &generated_tokens, config)?;
         transforms::async_eval([&y])?;

@@ -53,6 +53,18 @@ impl LanguageModel {
         let hidden = self.model.forward_with_embeds(inputs_embeds, position_ids, None, cache)?;
         self.lm_head.forward(&hidden)
     }
+
+    /// Process a prefill chunk: runs transformer layers to update KV cache,
+    /// but skips the lm_head projection since intermediate logits are unused.
+    pub fn prefill_chunk(
+        &mut self,
+        inputs_embeds: &Array,
+        position_ids: &Array,
+        cache: &mut [KVCache],
+    ) -> Result<(), Exception> {
+        let _hidden = self.model.forward_with_embeds(inputs_embeds, position_ids, None, cache)?;
+        Ok(())
+    }
 }
 
 /// Outer wrapper that matches safetensors key prefix `language_model.`
@@ -88,6 +100,17 @@ impl GlmOcrModel {
         cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         self.language_model.forward_with_embeds(inputs_embeds, position_ids, cache)
+    }
+
+    /// Process a prefill chunk: runs transformer layers to update KV cache,
+    /// but skips the lm_head projection since intermediate logits are unused.
+    pub fn prefill_chunk(
+        &mut self,
+        inputs_embeds: &Array,
+        position_ids: &Array,
+        cache: &mut [KVCache],
+    ) -> Result<(), Exception> {
+        self.language_model.prefill_chunk(inputs_embeds, position_ids, cache)
     }
 
     /// Get text token embeddings without running the transformer.
