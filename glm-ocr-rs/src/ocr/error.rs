@@ -90,8 +90,8 @@ impl EngineError {
 
 #[derive(Debug, Error)]
 pub enum OcrError {
-    #[error("server is busy")]
-    Busy,
+    #[error("evicted by newer request")]
+    Evicted,
 
     #[error("service is faulted")]
     Faulted {
@@ -117,7 +117,7 @@ pub enum OcrError {
 impl OcrError {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Busy => "busy",
+            Self::Evicted => "evicted",
             Self::Faulted { reason } => reason,
             Self::BadRequest { code, .. } => code,
             Self::Aborted => "request_aborted",
@@ -127,7 +127,7 @@ impl OcrError {
 
     pub fn message(&self) -> &'static str {
         match self {
-            Self::Busy => "server is busy with another request",
+            Self::Evicted => "evicted by newer request",
             Self::Faulted { .. } => "service is faulted and requires restart",
             Self::BadRequest { message, .. } => message,
             Self::Aborted => "request aborted",

@@ -248,7 +248,7 @@ async fn ocr_stream_handler(
 
 fn map_ocr_error(error: OcrError) -> ApiErrorResponse {
     let status = match &error {
-        OcrError::Busy => StatusCode::CONFLICT,
+        OcrError::Evicted => StatusCode::CONFLICT,
         OcrError::Faulted { .. } => StatusCode::SERVICE_UNAVAILABLE,
         OcrError::BadRequest { .. } => StatusCode::BAD_REQUEST,
         OcrError::Aborted => StatusCode::REQUEST_TIMEOUT,

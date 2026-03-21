@@ -89,7 +89,7 @@ impl OcrService {
         {
             let mut pending = lock_mutex(&self.pending);
             if let Some(old) = pending.take() {
-                let _ = old.result_tx.send(Err(OcrError::Busy));
+                let _ = old.result_tx.send(Err(OcrError::Evicted));
                 log::info!("Evicted pending request (replaced by newer request)");
             }
             // 2. Store ourselves as the new pending request.
