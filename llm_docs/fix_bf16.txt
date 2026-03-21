@@ -1,0 +1,1231 @@
+
+══════════════════════════════════════ Conversation compacted · ctrl+o for history ══════════════════════════════════════
+
+> /compact 
+  ⎿ Compacted
+
+● Read(mlx-ocr-2/src/generate.rs)
+  ⎿ Read 310 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/src/model/mrope.rs)
+  ⎿ Read 180 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/Cargo.toml)
+  ⎿ Read 40 lines (ctrl+o to expand)
+
+● I can see the current state:
+
+  1. generate.rs — still has the GPU capture code at tokens 10-12 with mlx_sys calls
+  2. mrope.rs — has the optimized repeat_interleave_last (stack+reshape) and rotate_half_llm (stack_axis)
+  3. Cargo.toml — has the mlx-sys dependency
+
+  The .gputrace was generated and opened in Xcode. We're waiting for your analysis of the trace, or for your next
+  instructions on what to do.
+
+  What did you find in the GPU trace, or what would you like to do next?
+
+> 我要怎么看这个界面，看不太懂 
+
+● 你是指 Xcode 打开 .gputrace 后的 GPU Debugger 界面？让我帮你理解怎么看。
+
+  Xcode GPU Debugger 的 .gputrace 界面主要有几个关键区域：
+
+  ---
+  左侧导航栏 (Navigator)
+  - 展示 Command Buffer 列表，每个 command buffer 包含多个 render/compute encoder
+  - MLX 的所有 GPU 操作都是 compute encoder（计算着色器），不是 render encoder
+  - 点击展开可以看到每个 encoder 里的 dispatch 调用
+
+  主时间线 (Timeline)
+  - 顶部是时间轴，显示每个 command buffer 和 encoder 的执行时间
+  - 可以缩放（pinch 或 cmd+滚轮）查看细节
+  - 每个色块代表一个 GPU kernel dispatch
+
+  要关注的信息：
+
+  1. 点击左侧的 "Performance" 标签页（如果有）— 这里会显示每个 kernel 的执行时间
+  2. 选中某个 compute encoder — 底部面板会显示：
+    - Kernel 名称：MLX 的 kernel 名字通常包含操作名，比如 matmul, gemv, copy, binary, unary, softmax, layernorm 等
+    - 执行时间
+    - 线程组大小
+  3. 排序方式：在 Performance 或 Summary 视图中，可以按 GPU 时间排序，找出最耗时的 kernel
+
+  ---
+  具体操作步骤：
+
+  1. 打开 .gputrace 后，看左侧是否有 "Summary" 或 "Performance" 选项
+  2. 如果在 Dependency Viewer（默认视图），尝试切换到 "Counters" 或点击菜单 Debug → GPU → Show GPU Counters
+  3. 在左侧 navigator 中展开 command buffer → compute command encoder → 可以看到每个 dispatch 的 kernel function name
+
+  你能截个图给我看一下当前界面长什么样吗？这样我能更精确地告诉你在哪里找到需要的信息。
+
+> 我目前看不到主时间线，要怎么样把这个主时间线给开起来 
+
+● 在 Xcode GPU Debugger 中打开时间线视图：
+
+  1. 菜单栏 → View → Navigators → Show GPU Timeline
+  2. 或者试试快捷键 Cmd + 5（切换到 Debug Navigator）
+
+  如果这些都不行，还可以试：
+
+  - 顶部工具栏看有没有 "Show Timeline" 按钮（时钟/图表图标）
+  - 菜单 Debug → GPU → Show GPU Timeline
+  - 底部面板区域可以拖拽调大，时间线可能被折叠了
+
+  另外一个可能：.gputrace 打开后 Xcode 默认可能进入的是 Dependency 
+  Viewer（依赖图视图），这不是时间线。你需要在窗口中找到切换按钮，通常在编辑器区域的顶部有几个图标可以切换不同视图模式。
+
+  你现在看到的是什么视图？能截图给我看一下吗？
+
+> Project 1 
+  Source Control 2 
+  Bookmarks 3 
+  Find 4 
+  Issues 5 
+  Tests 6 
+  Debug 7 
+  Breakpoints 8 
+  Reports 9 
+
+  Show Coding Assistant 0 
+  Hide Navigator 
+  Filter in Navigator J View Navigators只有这些选项，没有你说的show GPU timeline 
+
+● 明白了，GPU Timeline 不在 Navigator 菜单里。对于 .gputrace 文件，正确的方式是：
+
+  1. 在左侧 Navigator 中选择 "Debug" (Cmd+7)
+  2. 在 Debug Navigator 里应该能看到你的 .gputrace 的 command buffer 结构
+
+  但更关键的是编辑器区域（中间主窗口）的视图切换。打开 .gputrace 后：
+
+  - 看编辑器区域顶部或底部，应该有一排小图标按钮用于切换不同视图
+  - 通常包括：Summary、Dependency（依赖图）、Timeline（时间线）等选项
+  - 这些按钮可能是图标形式（比如一个横条图标代表 Timeline，一个网格图标代表 Dependency）
+
+  另一个方法：
+  - 在编辑器区域空白处或左侧导航树中，双击 command buffer 节点或者某个 compute command encoder
+  - 选中后右边面板可能会显示该 encoder 的执行时间等详细信息
+
+  你现在中间编辑器区域显示的是什么内容？是一个节点连线图（Dependency Viewer）？还是一个列表？还是空白？
+
+> Performance 
+  Memory 
+  Dependencies 
+  Summary 只有这些没有timeline 
+
+● 好的，那你当前能看到的四个视图中，Performance 就是你需要的。
+
+  点击 Performance 视图，这里会显示：
+
+  - 每个 GPU kernel（compute shader） 的执行时间
+  - Kernel 名称（MLX 的 kernel 名字会包含操作类型，比如 gemv, gemm, copy, binary, unary, softmax 等）
+  - 可以按 GPU Time 排序，找到最耗时的 kernel
+
+  在 Performance 视图里：
+
+  1. 看是否有一个 按时间排序的 kernel 列表
+  2. 或者左侧展开 command buffer → compute command encoder → 里面每个 dispatch 会显示 kernel 名和执行时间
+  3. 如果有 "Top Functions" 或 "Top Pipelines" 类似的汇总区域，那就是你要的——直接显示哪些 kernel 花的 GPU 时间最多
+
+  你切到 Performance 后看到了什么内容？
+
+> performance点进去显示performance is not available 
+
+● 这说明 .gputrace 捕获时没有包含 performance counters。这是 mlx_metal_start_capture 的一个限制——它做的是 programmatic
+  capture，默认只记录 command buffer 结构，不记录 GPU performance counters。
+
+  试试看 Dependencies 视图，那里应该能看到：
+  - 每个 command buffer 和 compute encoder 的结构
+  - 展开后能看到每个 dispatch 的 kernel function name
+  - 虽然没有精确的 GPU 时间，但至少能看到 2 个 decode step 分别 dispatch 了哪些 kernel，以及 kernel 数量
+
+  另外，要获取 performance data，需要用不同的 capture 方式。让我查一下怎么在 programmatic capture 中启用 GPU counters。
+
+● Search(MTLCaptureDescriptor captureWithDescriptor performance counters GPU time 2024 2025)
+  ⎿ Found 5 results for "MTLCaptureDescriptor captureWithDescriptor performance counters GPU time 2024 2025"
+
+● Search(mlx_metal_start_capture metal gpu trace performance not available xcode)
+  ⎿ Found 5 results for "mlx_metal_start_capture metal gpu trace performance not available xcode"
+
+● Fetch(http://mlx.numpy.com.cn/mlx/build/html/dev/metal_debugger.html)
+  ⎿ ✓ Processed content from https://mlx.numpy.com.cn/mlx/build/html/dev/metal_debugger.html
+
+● Fetch(https://github.com/ml-explore/mlx/issues/2846)
+  ⎿ ✓ Processed content from https://github.com/ml-explore/mlx/issues/2846
+
+● 根据调查结果，有两个问题：
+
+  问题 1：需要用 MLX_METAL_DEBUG=ON 编译 MLX
+
+  Performance 数据需要 MLX 在编译时启用 debug 标记。我们用的 mlx-rs 底层的 MLX C++ 库需要带 -DMLX_METAL_DEBUG=ON
+  编译，这样 Metal kernel 会带上 label 和 source 信息，Xcode 才能关联 performance data。
+
+  问题 2：macOS 版本兼容性问题
+
+  MLX 的 GitHub issue #2846 报告在 macOS 26.x 上 .gputrace 的 profile/replay 功能有 bug。
+
+  ---
+  目前可行的方案
+
+  先试试 Dependencies 视图 —— 虽然没有 performance counters，但它能显示：
+  - 所有 command buffer 和 compute encoder
+  - 每个 dispatch 的 kernel function name（这是最关键的——能看到 MLX 到底调用了哪些 Metal kernel）
+  - kernel 的参数信息
+
+  你点开 Dependencies 看看，展开 command buffer 节点，能否看到 kernel 名称列表？如果能看到 kernel
+  名，把那些名称告诉我，我就能把它们映射回具体的算子（matmul、layernorm、copy 等）。
+
+  如果 Dependencies 也看不到有用信息，另一个方案是重新编译 mlx-rs 底层的 MLX 库时加上 -DMLX_METAL_DEBUG=ON，然后重新捕获
+  trace。
+
+> 我使用的是macOS 15不是26，没有这个问题.dependencies的信息十分糟糕，完全看不到有效信息 
+
+● 那在 macOS 15 上应该可以让 Performance 工作。问题在于 MLX 编译时需要启用 -DMLX_METAL_DEBUG=ON。让我看看 mlx-rs
+  的构建脚本，找到怎么传递这个 flag。
+
+● 完美！现在修改 build.rs 启用 -DMLX_METAL_DEBUG=ON：
+
+● Read(mlx-rs/mlx-sys/build.rs)
+  ⎿ Read 21 lines (ctrl+o to expand)
+
+● Edit(mlx-rs/mlx-sys/build.rs)
+  ⎿ mlx-rs/mlx-sys/build.rs with 2 additions
+
+    3            config.define("MLX_BUILD_ACCELERATE", "ON");
+    4        }
+    5 
+    6 +      config.define("MLX_METAL_DEBUG", "ON");
+    7 +  
+    8        // build the mlx-c project
+    9        let dst = config.build();
+
+● 现在重新编译：
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust && cargo clean && cargo build --release 2>&1 | head -100)
+  ⎿ error: could not find `Cargo.toml` in `/Users/daisy/develop/GLM-OCR/rust` or any parent directory
+
+● Bash(ls -la /Users/daisy/develop/GLM-OCR/rust/ | head -20)
+  ⎿ total 1944
+    drwxr-xr-x@ 23 daisy  staff     736  3 21 11:03 .
+    drwxr-xr-x@ 17 daisy  staff     544  3 19 10:15 ..
+    ...+17 line (ctrl+o to expand)
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2 && cargo clean && cargo build --release 2>&1 | tail -50)
+  ⎿ 🔄 Command moved to background.
+
+● 编译需要一段时间。编译完成后，我们需要：
+
+  1. 用 METAL_CAPTURE_ENABLED=1 和新编译的二进制重新生成 .gputrace
+  2. 打开到 Xcode 的 Performance 视图（这次应该能显示性能数据）
+
+  让我创建任务来追踪这个工作：
+
+● TaskCreate
+  ⎿ Task #3 created successfully: Rebuild with MLX_METAL_DEBUG and regenerate GPU trace
+
+● 还在清理阶段，继续等待编译完成。这会耗时较长因为要重新编译整个 MLX C++ 库。
+
+  让我检查一下当前有没有已编译的二进制：
+
+● Bash(ps aux | grep -i cargo | grep -v grep)
+  ⎿ daisy            55483  44.7  0.3 410595376 162720   ??  R    12:20下午   0:00.27
+    /Users/daisy/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc --crate-name regex_automata --edition=2021
+    /Users/daisy/.cargo/registry/src/rsproxy.cn-e3de039b2554c837/regex-automata-0.4.14/src/lib.rs --error-format=json
+    ...+176 line (ctrl+o to expand)
+
+● 编译还在进行中，是正常的。继续等待...
+
+● 编译刚开始，让我等待更长的时间。由于这是全量清理+重新编译 MLX C++ 库，可能需要 5-15 分钟。让我继续监控：
+
+● 编译仍在运行。由于这个过程需要较长时间，让我检查一下是否有更快的方法。实际上，我们可以尝试另一个思路——不等待完整编译，
+  而是先分析已有的数据。
+
+  但首先让我也看看之前是否有 MLX_METAL_DEBUG=ON 编译的 binary 可以用。让我再等一会儿，给编译更多时间：
+
+● Bash(ls -lh /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/targe…l && echo "Binary found" || echo "Binary not yet built")
+  ⎿ Binary not yet built
+
+● 编译还在进行。让我继续等待，这次给更长的超时时间等待编译完成。我将每 30 秒检查一次：
+
+● Bash(for i in {1..20}; do sleep 30; if [ -f /Users/daisy/deve…M-OCR/rust/mlx-ocr-2/target/release/glm-ocr-server 2>&1)
+  ⎿ 🔄 Command moved to background.
+
+● 现在编译已经在后台运行。让我同时准备好下一步的工作——一旦编译完成，我需要用 METAL_CAPTURE_ENABLED=1 重新捕获 trace。
+
+  让我提前写好脚本：
+
+● Read(test_ocr.py)
+  ⎿ Read 51 lines (ctrl+o to expand)
+
+● 好的，test_ocr.py 会向 server 发送请求。编译完成后，我需要：
+
+  1. 启动 server 并设置 METAL_CAPTURE_ENABLED=1
+  2. 运行 test_ocr.py 触发 trace 生成
+  3. 在 Xcode 中打开新的 trace 并查看 Performance 数据
+
+  让我为这个工作流写个监控脚本。先等待编译完成，然后立即执行下一步：
+
+● Fish 语法有问题。让我用 bash 语法改写：
+
+● Bash(bash -c 'for i in {1..40}; do sleep 30; if [ -f /Users/d…-OCR/rust/mlx-ocr-2/target/release/glm-ocr-server 2>&1')
+  ⎿ 🔄 Command moved to background.
+
+● 现在编译在后台进行。让我更新任务列表并为你总结当前的状态：
+
+● TaskUpdate
+  ⎿ Updated task #3 status
+
+● ---
+  当前进度总结
+
+  已完成：
+  1. ✅ 修改了 /Users/daisy/develop/GLM-OCR/rust/mlx-rs/mlx-sys/build.rs，添加 config.define("MLX_METAL_DEBUG", "ON")
+  2. ✅ 启动 cargo build --release 编译（启用了 MLX_METAL_DEBUG）
+
+  正在进行：
+  3. ⏳ 编译进行中（后台任务 vu4BZV，预计 5-20 分钟）
+
+  待做：
+  4. 编译完成后，用 METAL_CAPTURE_ENABLED=1 启动 server
+  5. 运行 test_ocr.py 生成新的 .gputrace（这次会包含 performance counters）
+  6. 在 Xcode Performance 视图中查看 GPU kernel 执行时间
+  7. 从 Performance 数据提取最耗时的 Metal kernel 名称
+
+  一旦 MLX 以 debug 模式编译，.gputrace 就会包含 Metal shader 的调试信息和性能计数，Xcode 的 Performance
+  视图应该就能显示了。
+
+  让我继续监控编译进度...
+
+> 继续 
+
+● 还在编译中，已经过了约 1 分钟。让我也检查一下主编译进程的状态：
+
+● tail -50 的输出还只是 clean 部分。编译正在进行但 tail 只会在最后输出最终的 50 行。让我直接阻塞等待编译完成：
+
+● 让我用监控任务来等待，那个 30 秒一次轮询更合理：
+
+● 大约 3 分钟了。编译 MLX C++ 库是耗时最大的部分。让我给更长的超时等待：
+
+● 让我直接等 vu4BZV 完成（每 30s 检查一次，最多 20 分钟）：
+
+● Bash(bash -c 'while true; do if [ -f /Users/daisy/develop/GLM…get/release/glm-ocr-server; exit 0; fi; sleep 10; done')
+  ⎿ BUILD DONE
+    -rwxr-xr-x@ 1 daisy  staff    25M  3 21 12:24
+    /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/release/glm-ocr-server
+
+● 编译完成！现在删除旧的 trace 文件，启动 server，并运行 test 重新捕获：
+
+● Bash(rm -rf /tmp/decode.gputrace)
+  ⎿ (No content)
+
+● Bash(pkill -f glm-ocr-server 2>/dev/null; sleep 1; echo "done")
+  ⎿ done
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2 && METAL_…r --model-path /Users/daisy/develop/GLM-OCR/models 2>&1)
+  ⎿ 🔄 Command moved to background.
+
+● Bash(sleep 5 && curl -s http://127.0.0.1:8080/ 2>&1 || echo "… http://127.0.0.1:8080/ 2>&1 || echo "Still waiting...")
+  ⎿ Server not ready yet, waiting more...
+    Still waiting...
+
+● 参数名是 --model-dir 不是 --model-path：
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2 && METAL_…er --model-dir /Users/daisy/develop/GLM-OCR/models 2>&1)
+  ⎿ 🔄 Command moved to background.
+
+● Bash(bash -c 'for i in {1..20}; do sleep 3; if curl -s http:/…it 0; fi; echo "waiting ($i)..."; done; echo "TIMEOUT"')
+  ⎿ waiting (1)...
+    waiting (2)...
+    waiting (3)...
+    ...+18 line (ctrl+o to expand)
+
+● Server 没有就绪。让我看看 server 日志：
+
+● Model 目录有问题。让我检查一下：
+
+● Bash(ls /Users/daisy/develop/GLM-OCR/models/)
+  ⎿ GLM-OCR-bf16/          PaddleOCR-VL-1.5-bf16/
+
+● 需要指定具体的 model 子目录：
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2 && METAL_…r /Users/daisy/develop/GLM-OCR/models/GLM-OCR-bf16 2>&1)
+  ⎿ 🔄 Command moved to background.
+
+● Bash(bash -c 'for i in {1..30}; do sleep 3; if curl -s http:/…it 0; fi; echo "waiting ($i)..."; done; echo "TIMEOUT"')
+  ⎿ Server ready at attempt 1
+
+● Server 就绪了！现在运行 test_ocr.py 来触发 GPU trace 捕获：
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust && python test_ocr.py 2>&1 | tail -20)
+  ⎿ 6. 定义在 $R$ 上的函数 $f(x)$ 满足 $f(x + 2) = -f(x)$，且 $f(-x) = -f(x)$，若 $0 < x \leq 1$ 时，$f(x) = 2x +
+    1$，$f(1) =$（    ）
+    A. 3
+    ...+19 line (ctrl+o to expand)
+
+● 测试完成了。让我检查 server 日志确认 GPU capture 成功：
+
+● GPU capture 成功了！日志显示：
+  - GPU capture started (ret=0) — 捕获开始成功
+  - GPU capture stopped (ret=0) — 捕获停止成功
+  - Trace 在 /tmp/decode.gputrace
+
+  现在打开新的 trace：
+
+● Bash(open /tmp/decode.gputrace)
+  ⎿ (No content)
+
+● 新的 .gputrace 已经在 Xcode 中打开了。这次编译时启用了 MLX_METAL_DEBUG=ON，Metal shader
+  会带有调试信息（-gline-tables-only -frecord-sources）和对象标签。
+
+  请再次点击 Performance 视图，看看这次是否能显示性能数据了。
+
+> decode.gputrace 
+  Mar 21, 2026 at 12:26 
+  Captured from DAISYJGUO-MC0 (Apple M4 Pro) on macOS 15.7.4 
+
+  DAISYJGUO-MC0 (Apple M4 Pro, macOS 15.7.4) 
+
+  Profile after replay 
+
+  Replay  在这个界面我要点什么 
+
+● 点 "Replay" 按钮。
+
+  Replay 会让 Xcode 在你的 GPU 上重放捕获的 Metal 命令。重放完成后，Performance 视图就会有数据了。
+
+  如果旁边有 "Profile after replay" 的勾选框，确保它是勾选状态，然后再点 Replay。这样重放的同时会收集 GPU performance
+  counters。
+
+> 你profile的整个单元是一个decode step还是整个decode过程 
+
+● 是 2 个 decode step，不是整个 decode 过程。
+
+  看 generate.rs 中的代码：
+  - token 10 时 start capture
+  - token 12 时 stop capture
+
+  所以捕获了 token 10→11 和 11→12 这 2 个 decode step。
+
+  如果你觉得 2 步太少不够代表性，或者想只捕获 1 步更干净，我可以改范围。要调整吗？
+
+> 把上述进行profile的步骤记录下来profile_metal_help.md 
+
+● Write(profile_metal_help.md)
+  ⎿ Wrote 104 lines (ctrl+o to expand)
+
+> 记录完不要再总结，直接停止输出 
+
+● 好的。
+
+> 我发现几乎40%的时间都被vn_copybfloat16float32这个算子占据。这可能是什么原因？分析Rust代码解释。 
+
+● vn_copy 是 MLX 的类型转换 kernel——bfloat16 → float32。40% 的时间花在类型转换上，说明 decode 路径中有大量 bf16→f32
+  的隐式转换。
+
+  让我分析代码找出这些转换发生在哪里。
+
+● 分析结果
+
+  40% 时间在 vn_copy (bf16→f32) 的主要原因：
+
+  1. M-RoPE (每个 decode step 都调用) — mrope.rs
+
+  最大的问题在这里：
+
+  // Line 51: 显式转换 position_ids 到 f32
+  let position_ids_f32 = position_ids.as_dtype(mlx_rs::Dtype::Float32)?;
+
+  // Line 22-27: inv_freq 从一开始就是 f32
+  let arange = ops::arange::<_, f32>(0, dim, 2)?;
+  let inv_freq = ...  // 结果是 f32
+
+  // Line 64-65: cos/sin 用 f32 scalar 乘法
+  let cos = ops::cos(&emb)?.multiply(Array::from_f32(self.attention_scaling))?;
+  let sin = ops::sin(&emb)?.multiply(Array::from_f32(self.attention_scaling))?;
+
+  // Line 68: 转回 bf16
+  Ok((cos.as_dtype(dtype)?, sin.as_dtype(dtype)?))
+
+  每个 decode step，RoPE 都在 f32 中计算，然后转回 bf16。这是 vn_copy 的主要来源。
+
+  2. Sampler (每个 decode step 调用) — sampler.rs
+
+  大量 f32 scalar 和 bf16 tensor 混合运算：
+  let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+  let threshold = Array::from_f32(1.0 - top_p);
+  let inv_temp = Array::from_f32(1.0 / temperature);
+
+  当 bf16 tensor 和 f32 scalar 运算时，MLX 会将 bf16 提升到 f32。
+
+  3. SDPA (MLX 内部行为)
+
+  scaled_dot_product_attention 内部的 softmax 固定用 f32 计算（这是 MLX 的设计，为了数值稳定性）。
+
+  ---
+  要修复吗？主要改 mrope.rs，让 inv_freq 用 bf16 存储，避免每步的 f32 round-trip。
+
+> 这里python是怎么实现的？ 
+
+● Python 实现对比
+
+  关键区别：
+
+  Python M-RoPE (language.py):
+  # inv_freq 始终是 f32
+  self._inv_freq = mx.array(inv_freq, dtype=mx.float32)
+
+  # 整个计算过程都在 f32 中
+  inv_freq_expanded.astype(mx.float32) @ position_ids_expanded.astype(mx.float32)
+  cos = mx.cos(emb) * self.attention_scaling  # f32
+  sin = mx.sin(emb) * self.attention_scaling  # f32
+
+  # 只在返回时转回 bf16
+  return cos.astype(x.dtype), sin.astype(x.dtype)
+
+  Python Sampler (sample_utils.py):
+  # 直接用 Python float 和 bf16 tensor 运算
+  return mx.random.categorical(logits * (1 / temp))  # temp 是 Python float
+
+  # MLX 会自动把 Python scalar 提升到 bf16
+  selected_logits = selected_logits * penalty  # penalty 是 Python float
+
+  问题在哪：
+
+  Python MLX 有自动类型提升机制，bf16 tensor * python_float 会自动把 float 提升到 bf16。
+
+  Rust mlx-rs 没有这个自动提升，需要显式创建 bf16 版本的 scalar：
+  let inv_temp = Array::from_f32(1.0 / temperature);  // 这会是 f32！
+  let scaled = ops::multiply(&lp, &inv_temp)?;  // bf16 * f32 → 类型提升
+
+  所以 Rust 需要改成：
+  let inv_temp_bf16 = Array::from_f32(1.0 / temperature)?.as_dtype(Dtype::Bfloat16)?;
+
+  或者让 MLX-rs 的 Array::from_* 函数支持 dtype 参数。
+
+> 如果要改动，相比于原来的rust实现改了哪里 
+
+● 核心改动就是：把所有 Array::from_f32(...) 创建的 f32 scalar 改成 bf16，避免 bf16 tensor 和 f32 scalar
+  运算时触发类型提升。
+
+  具体需要改的地方：
+
+  1. mrope.rs — 不需要改
+
+  Python 也是在 f32 中计算 cos/sin 然后转回 bf16，Rust 已经是这样做了。这部分 f32→bf16
+  转换是正确且必要的（数值精度需要）。
+
+  2. sampler.rs — 需要改
+
+  当前代码中所有 Array::from_f32(...) 创建的是 f32 scalar，和 bf16 的 logits 运算时会把整个 tensor 提升到 f32。
+
+  改动：把每个 f32 scalar 转成 bf16。
+
+  3. generate.rs — step() 函数中的 logsumexp
+
+  logsumexp 的输入如果是 bf16，MLX 内部可能会提升。但这和 Python 行为一致，不需要改。
+
+  ---
+  让我具体看一下 sampler.rs 的代码：
+
+● Read(mlx-ocr-2/src/sampler.rs)
+  ⎿ Read 165 lines (ctrl+o to expand)
+
+● 具体需要改动的 Array::from_f32(...) 有以下这些：
+
+  ┌──────┬────────────────────────────────────┬─────────────────────────────┐
+  │ 行号 │ 当前代码                           │ 改动                        │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 31   │ Array::from_f32(f32::NEG_INFINITY) │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 32   │ Array::from_f32(1.0 - top_p)       │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 46   │ Array::from_f32(min_p.ln())        │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 52   │ Array::from_f32(f32::NEG_INFINITY) │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 94   │ Array::from_f32(f32::NEG_INFINITY) │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 119  │ Array::from_f32(penalty)           │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 120  │ Array::from_f32(0.0)               │ .as_dtype(Dtype::Bfloat16)? │
+  ├──────┼────────────────────────────────────┼─────────────────────────────┤
+  │ 161  │ Array::from_f32(1.0 / temperature) │ .as_dtype(Dtype::Bfloat16)? │
+  └──────┴────────────────────────────────────┴─────────────────────────────┘
+
+  mrope.rs 不需要改——Python 同样在 f32 中计算 RoPE 再转回 bf16。
+
+  总结：改动只在 sampler.rs，每个 Array::from_f32(...) 后面加 .as_dtype(Dtype::Bfloat16)?。这样 scalar 和 bf16 tensor
+  运算时不会触发整个 tensor 的类型提升。
+
+> 进行一下改动，不要跑 
+
+● MultiEdit(mlx-ocr-2/src/sampler.rs)
+  ⎿ mlx-ocr-2/src/sampler.rs with 8 additions and 8 removals
+
+    1 -      let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+    2 -     let threshold = Array::from_f32(1.0 - top_p);
+    1 +     let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
+    2 +      let threshold = Array::from_f32(1.0 - top_p).as_dtype(Dtype::Bfloat16)?;
+
+    ...
+
+    1 -     let scaled_min_p = &top_logprobs + Array::from_f32(min_p.ln());
+    1 +     let scaled_min_p = &top_logprobs + Array::from_f32(min_p.ln()).as_dtype(Dtype::Bfloat16)?;
+
+    ...
+
+    1 -     let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+    1 +     let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
+    2        let num_classes = logprobs.shape().last().copied().unwrap_or(1);
+
+    ...
+
+    1 -     let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+    1 +     let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
+    2        put_along_axis(logprobs, &mask_indices, &neg_inf, -1)
+
+    ...
+
+    1 -      let penalty_arr = Array::from_f32(penalty);
+    2 -     let zero = Array::from_f32(0.0);
+    1 +     let penalty_arr = Array::from_f32(penalty).as_dtype(Dtype::Bfloat16)?;
+    2 +      let zero = Array::from_f32(0.0).as_dtype(Dtype::Bfloat16)?;
+
+    ...
+
+    1 -     let inv_temp = Array::from_f32(1.0 / temperature);
+    1 +     let inv_temp = Array::from_f32(1.0 / temperature).as_dtype(Dtype::Bfloat16)?;
+    2        let scaled = ops::multiply(&lp, &inv_temp)?;
+
+● 改完了。所有 Array::from_f32(...) 后面都加了 .as_dtype(Dtype::Bfloat16)?。
+
+> 性能没有任何提升。再找一下其他地方的类型转换。 
+
+● Explore · Read(mlx-ocr-2/src/model/attention.rs)
+  ⎿ Read 137 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/model/decoder.rs)
+  ⎿ Read 100 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/model/text_model.rs)
+  ⎿ Read 144 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/model/language_model.rs)
+  ⎿ Read 103 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/model/mrope.rs)
+  ⎿ Read 180 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/cache.rs)
+  ⎿ Read 127 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/generate.rs)
+  ⎿ Read 310 lines (ctrl+o to expand)
+
+● Explore · Now let me read the mlx-rs library files to check for internal type conversions:
+
+● Explore · Read(mlx-rs/mlx-rs/src/nn/normalization.rs)
+  ⎿ Read 807 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-rs/mlx-rs/src/fast.rs)
+  ⎿ Read 404 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-rs/mlx-rs/src/nn/linear.rs)
+  ⎿ Read 254 lines (ctrl+o to expand)
+
+● Explore · Now let me check the sampler.rs and the MLP file for any conversions:
+
+● Explore · Read(mlx-ocr-2/src/sampler.rs)
+  ⎿ Read 165 lines (ctrl+o to expand)
+
+● Explore · Read(mlx-ocr-2/src/model/mlp.rs)
+  ⎿ Read 55 lines (ctrl+o to expand)
+
+● Explore · Now let me search for the embedding module implementation:
+
+● Explore · Read(mlx-rs/mlx-rs/src/nn/embedding.rs)
+  ⎿ Read 109 lines (ctrl+o to expand)
+
+● Explore · Now let me search for silu implementation and any other type conversions:
+
+● Explore · Search(pattern: "Array::from_int|Array::from_bool|from_f32|as_dtype|Float32", path: "mlx-ocr-2/src")
+  ⎿ Found 52 lines (ctrl+o to expand)
+
+● Explore · Search(pattern: "f32\]|:.*f32|f32::", path: "mlx-ocr-2/src")
+  ⎿ Found 48 lines (ctrl+o to expand)
+
+● Explore · Now let me check the full_model.rs to see the compute_position_ids and forward paths:
+
+● Explore · Read(mlx-ocr-2/src/full_model.rs)
+  ⎿ Read 444 lines (ctrl+o to expand)
+
+● Explore · Now let me check the vision rotary embedding code since that has explicit f32 conversions:
+
+● Explore · Read(mlx-ocr-2/src/vision/rotary.rs)
+  ⎿ Read 71 lines (ctrl+o to expand)
+
+● Explore · Now let me check the MLX C++ fast.cpp for rms_norm to see if it does f32 conversion internally:
+
+● Explore · Search(pattern: "Float32|float32|astype|as_type", path: "mlx-rs/mlx-c")
+  ⎿ Found 0 matches 
+
+● Explore · Bash(ls /Users/daisy/develop/GLM-OCR/rust/mlx-rs/)
+  ⎿ Cargo.lock           LICENSE-APACHE       mlx-lm/              mlx-rs/              README.md@
+    Cargo.toml           LICENSE-MIT          mlx-lm-utils/        mlx-sys/             target/
+    examples/            mlx-internal-macros/ mlx-macros/          mlx-tests/           xtask/
+
+● Explore · Search(pattern: "rms_norm|layer_norm", path: "mlx-rs/mlx-sys/src")
+  ⎿ Found 2 files (ctrl+o to expand)
+
+● Explore · Read(mlx-rs/mlx-sys/src/mlx-c/mlx/c/fast.cpp)
+  ⎿ Read 634 lines (ctrl+o to expand)
+
+● Explore · This is just the C wrapper. Let me find the actual MLX implementation of rms_norm:
+
+● Explore · Bash(find /Users/daisy/develop/GLM-OCR/rust/mlx-rs -name…" | xargs grep -l "rms_norm" 2>/dev/null | head -5)
+  ⎿ /Users/daisy/develop/GLM-OCR/rust/mlx-rs/target/debug/build/mlx-sys-68831fd204f9959d/out/build/_deps/mlx-src/python/s
+    rc/fast.cpp
+    /Users/daisy/develop/GLM-OCR/rust/mlx-rs/target/debug/build/mlx-sys-68831fd204f9959d/out/build/_deps/mlx-src/mlx/fast
+    ...+7 line (ctrl+o to expand)
+
+● Explore · Search(pattern: "rms_norm|astype|float32", path: "mlx-rs/…fd204f9959d/out/build/_deps/mlx-src/mlx/fast.cpp")
+  ⎿ Found 219 lines (ctrl+o to expand)
+
+● Explore · This is very helpful. Now I have all the information. Let me compile the complete report:
+
+  ---
+  Analysis Summary: bf16→f32 Type Conversion Locations in Decode Path
+
+  Based on a complete analysis of all files in the decode path, here are ALL locations where bf16→f32 conversion happens:
+
+  CRITICAL FINDINGS:
+
+  1. mrope.rs (Line 51, 64-68) - MAJOR CULPRIT
+
+  // Line 51: position_ids are converted to Float32 for matmul
+  let position_ids_f32 = position_ids.as_dtype(mlx_rs::Dtype::Float32)?;
+
+  // Line 64-65: cos/sin are computed in f32 then multiplied with f32 scalar
+  let cos = ops::cos(&emb)?.multiply(Array::from_f32(self.attention_scaling))?;
+  let sin = ops::sin(&emb)?.multiply(Array::from_f32(self.attention_scaling))?;
+
+  // Line 68: cos/sin are converted back to bf16
+  Ok((cos.as_dtype(dtype)?, sin.as_dtype(dtype)?))
+  This happens EVERY decode step because rotary embeddings are computed each step.
+
+  2. mrope.rs (Lines 22-27) - inv_freq initialization
+
+  let arange = ops::arange::<_, f32>(0, dim, 2)?;  // Creates f32 array
+  let inv_freq = arange.divide(Array::from_f32(dim as f32))?.power(Array::from_f32(1.0))?;
+  let ln_base = Array::from_f32(base.ln());
+  The inv_freq stays as f32 and when multiplied with bf16 position_ids causes promotion.
+
+  3. generate.rs (Line 200) - DECODE PATH
+
+  let y_input = Array::from_int(current_token).reshape(&[1, 1])?;
+  This creates an i32 array which is then used for embedding lookup. The Embedding.forward() should handle this correctly
+   (it's just indexing), BUT if there's any arithmetic with this array, it would cause type promotion.
+
+  4. full_model.rs (Line 399)
+
+  let delta_val = ops::add(&Array::from_int(cache_offset), delta)?;
+  Creates i32 scalar and adds to position delta.
+
+  MLX Library Internals (fast.cpp):
+
+  5. rms_norm fallback (Lines 92, 101)
+
+  auto x = astype(inputs[0], float32, s);  // bf16 → f32
+  // ... computation ...
+  x = astype(x, out_type, s);  // f32 → bf16
+  When the optimized Metal kernel is NOT used (fallback path), rms_norm converts to f32 and back.
+
+  The optimized path (line 118) still does:
+  {astype(x, out_type, s), passed_weight}
+  This promotes both x and weight to the same type. If weight is f32 (default from RmsNormBuilder) and x is bf16, this 
+  could cause promotion.
+
+  6. nn/normalization.rs (Line 225)
+
+  fn build_rms_norm(builder: RmsNormBuilder) -> Result<RmsNorm, Exception> {
+      let weight = ones::<f32>(&[builder.dimensions])?;  // WEIGHT IS F32!
+  RmsNorm weight is initialized as f32 by default. When weights are loaded from safetensors in bf16, they SHOULD 
+  overwrite this, but you need to verify.
+
+  7. nn/linear.rs (Line 39)
+
+  let weight = crate::random::uniform::<_, f32>(-scale, scale, &[output_dims, input_dims], None)?;
+  Linear weight is initialized as f32. Same issue - must be overwritten by loaded weights.
+
+  8. cache.rs (Lines 28-29, 86-87)
+
+  keys: Array::from_f32(0.0),
+  values: Array::from_f32(0.0),
+  Placeholder scalars are f32. When cache grows, zeros are allocated with ops::zeros_dtype using the input dtype (line 
+  81-82), so this should be fine.
+
+  Vision Encoder (NOT in decode path but worth noting):
+
+  9. vision/rotary.rs (Lines 60-67)
+
+  let q_f32 = q.as_dtype(Dtype::Float32)?;
+  let k_f32 = k.as_dtype(Dtype::Float32)?;
+  // ... computation ...
+  let q_embed = q_embed.as_dtype(q.dtype())?;
+  let k_embed = k_embed.as_dtype(k.dtype())?;
+  Vision rotary explicitly converts to f32 and back. Not in decode loop.
+
+  ---
+  Root Cause Analysis
+
+  The primary cause of vn_copy in the decode path is likely:
+
+  1. mrope.rs: The inv_freq array is f32, and every decode step computes:
+    - matmul(inv_freq_expanded, position_ids_expanded) where inv_freq is f32
+    - This produces f32 result
+    - cos/sin operations keep it f32
+    - Final as_dtype(dtype) converts back to bf16
+  2. RmsNorm weight type: If the loaded weights somehow remain f32 or if there's type mismatch, every norm operation (4
+  per layer × 16 layers = 64 per decode step) would cause conversion.
+
+  ---
+  Recommended Fixes
+
+  Fix 1: Make inv_freq bf16 in mrope.rs
+
+  // In GlmOcrRotaryEmbedding::new()
+  let inv_freq = inv_freq.as_dtype(mlx_rs::Dtype::Bfloat16)?;
+
+  Fix 2: Keep position_ids as i32, but ensure matmul promotes correctly
+
+  Or cast inv_freq to bf16 and let matmul handle int→float promotion natively.
+
+  Fix 3: Verify all loaded weights are bf16
+
+  After load_safetensors, check that norm weights and linear weights are bf16:
+  // Debug check
+  for (name, array) in model.parameters() {
+      if array.dtype() != Dtype::Bfloat16 {
+          log::warn!("Parameter {} is {:?}, not bf16", name, array.dtype());
+      }
+  }
+
+● 核心问题找到了：
+
+  主要瓶颈：mrope.rs 中的 inv_freq 是 f32
+
+  每个 decode step 都在做：
+  1. inv_freq (f32) × position_ids → f32 matmul
+  2. cos/sin 计算 (f32)
+  3. 转回 bf16
+
+  这是 Python 的行为一样，但 Python MLX 可能有更优化的内部处理。
+
+  其他可能问题：RmsNorm weight 的 dtype
+
+  如果加载的 RmsNorm weight 不是 bf16，每层的 4 个 norm × 16 层 = 64 次 norm 操作都会触发类型转换。
+
+  让我检查 weight 加载后的 dtype：
+
+● Search(pattern: "load_safetensors|set_weights|update_params", path: "mlx-ocr-2/src")
+  ⎿ Found 2 files (ctrl+o to expand)
+
+● Read(mlx-ocr-2/src/loader.rs)
+  ⎿ Read 81 lines (ctrl+o to expand)
+
+● 已经有调试代码了！让我检查一下 RmsNorm weight 加载后的实际 dtype。先看一下 server 的日志：
+
+● 这是旧的日志（改 sampler.rs 之前的运行）。debug 日志行 RmsNorm weight dtype after loading
+  没有打出来——说明那段代码是最近加的但还没重新编译运行过。
+
+  让我检查当前代码中是否有这行，然后直接检查 mlx-rs 的 rms_norm 实现：
+
+● Read(mlx-rs/mlx-rs/src/fast.rs)
+  ⎿ Read 151 lines (ctrl+o to expand)
+
+● 看到了关键注释（第 141 行）：
+
+  Note: The softmax operation is performed in float32 precision regardless of input precision (float16 or float32).
+
+  这是 MLX 的设计，softmax 固定在 f32 中计算。让我看 rms_norm：
+
+● Search(pattern: "rms_norm", path: "mlx-rs/mlx-rs/src/fast.rs")
+  ⎿ Found 4 lines (ctrl+o to expand)
+
+● Read(mlx-rs/mlx-rs/src/fast.rs)
+  ⎿ Read 31 lines (ctrl+o to expand)
+
+● rms_norm 是直接调 C 库的，类型转换发生在 MLX C++ 内部。
+
+  关键问题是：SDPA 内部的 softmax 固定 f32，这是 MLX 设计，无法避免。
+
+  那 40% 的 vn_copy 到底来自哪里？让我更仔细检查一下 profile 数据中 vn_copy 的调用栈。这需要你帮忙：
+
+  你能在 Xcode 的 Dependencies 或 Summary 视图里，点击 vn_copy 相关的
+  kernel，看看它的上下文或调用来源吗？比如它前后是哪些 kernel？
+
+  ---
+  另外，让我检查一下 generate.rs 里有没有其他类型转换：
+
+● Read(mlx-ocr-2/src/generate.rs)
+  ⎿ Read 51 lines (ctrl+o to expand)
+
+● logsumexp 可能在内部提升到 f32。让我检查 MLX 的 logsumexp 是否固定 f32：
+
+● Search(pattern: "logsumexp", path: "mlx-rs/mlx-rs/src")
+  ⎿ Found 26 lines (ctrl+o to expand)
+
+● logsumexp 也是直接调 MLX C 库，内部行为取决于 MLX 实现。
+
+  现在看看还有什么地方可能造成问题。让我检查 full_model.rs 的 compute_position_ids：
+
+● Search(pattern: "compute_position_ids|from_int|from_f32", path: "mlx-ocr-2/src/full_model.rs")
+  ⎿ Found 102 lines (ctrl+o to expand)
+
+● 这些都是 prefill 阶段的代码。decode 阶段只会调用 compute_position_ids (line 399):
+
+  let delta_val = ops::add(&Array::from_int(cache_offset), delta)?;
+
+  cache_offset 是 i32，delta 应该也是 i32（来自 Array::from_int）。这个是整数运算，不会有 bf16→f32 问题。
+
+  ---
+  让我再确认一下，你说 profile 中 40% 是 vn_copybfloat16float32——这个 kernel 名字表示的方向是 bf16 → f32。
+
+  关键问题：这个 40% 有多少次调用？是很多小调用累积起来的，还是少量大调用？
+
+  如果你能在 Xcode 里看到这个 kernel 的：
+  1. 调用次数
+  2. 每次的输入 tensor 大小
+  3. 前后 kernel 是什么
+
+  这会帮助我精确定位问题来源。
+
+  ---
+  如果无法看到这些细节，我有另一个方案：在代码中的关键位置加 dtype 断言，确保在整个 decode 路径中没有意外的 f32 tensor
+  出现。
+
+> | Cost | Name | Type | Pipeline State | # SIMD Groups | # Allocated Registers | 
+  | :--- | :--- | :--- | :--- | :--- | :--- | 
+  | 75.04% | vn_copybfloat16float32 | Compute | Compute Pipeline 0x13dfc08... | 17992264 | 8 | 
+  | 13.18% | gemv_float32_bm8_bn1_sm... | Compute | Compute Pipeline 0x14deb5... | 103900 | 86 | 
+  | 10.03% | gemv_float32_bm4_bn1_sm... | Compute | Compute Pipeline 0x341c31... | 57431 | 86 | 
+  | 0.96% | sdpa_vector_float_128_128 | Compute | Compute Pipeline 0x14dea9... | 16768 | 58 | 
+  | 0.11% | gemv_bfloat16_bm4_bn1_s... | Compute | Compute Pipeline 0x14f9c53... | 2130 | 72 | 
+  | 0.08% | vv_Addfloat32 | Compute | Compute Pipeline 0x12ff94b... | 9910 | 6 | 
+  | 0.08% | v_copybfloat16float32 | Compute | Compute Pipeline 0x14ded5... | 7363 | 4 | 
+
+● 这个数据非常关键。
+
+  75% 是 vn_copy (bf16→f32)，但注意 gemv 也是 float32 版本！
+
+  ┌──────────────────────┬──────┬───────────────────────────────────────┐
+  │ Kernel               │ 精度 │ 含义                                  │
+  ├──────────────────────┼──────┼───────────────────────────────────────┤
+  │ gemv_float32_bm8...  │ f32  │ 矩阵向量乘（linear层），在 f32 中执行 │
+  ├──────────────────────┼──────┼───────────────────────────────────────┤
+  │ gemv_float32_bm4...  │ f32  │ 矩阵向量乘，f32                       │
+  ├──────────────────────┼──────┼───────────────────────────────────────┤
+  │ gemv_bfloat16_bm4... │ bf16 │ 矩阵向量乘，bf16（只占 0.11%！）      │
+  └──────────────────────┴──────┴───────────────────────────────────────┘
+
+  问题不是 sampler 或 mrope 的小 scalar。问题是所有 Linear 层（q_proj, k_proj, v_proj, o_proj, gate_up_proj, 
+  down_proj）的 gemv 都在 f32 中执行。
+
+  流程是：
+  1. vn_copy bf16→f32：把 bf16 的 weight 或 input 转成 f32（75%）
+  2. gemv_float32：用 f32 做矩阵乘（23%）
+  3. 只有 0.11% 的 gemv 在 bf16 中
+
+  这说明 Linear 层的 weight 或 input 中有一个是 f32，导致 MLX 选择了 f32 的 gemv kernel。
+
+  需要查清楚是 weight 还是 input 是 f32。让我检查模型权重加载后的 dtype：
+
+● Read(mlx-ocr-2/src/model/attention.rs)
+  ⎿ Read 137 lines (ctrl+o to expand)
+
+● 现在看 Linear 层的实现，看看 weight 初始化为什么 dtype：
+
+● Read(mlx-rs/mlx-rs/src/nn/linear.rs)
+  ⎿ Read 254 lines (ctrl+o to expand)
+
+● 找到根本原因了！
+
+  linear.rs 第 39 行：
+  let weight = crate::random::uniform::<_, f32>(-scale, scale, &[output_dims, input_dims], None)?;
+
+  Linear 层的 weight 初始化为 f32！
+
+  然后需要看 load_safetensors 是否会把 weight 替换为 bf16。让我看 load_safetensors 的实现：
+
+● Search(pattern: "fn load_safetensors", path: "mlx-rs/mlx-rs/src")
+  ⎿ Found 4 lines (ctrl+o to expand)
+
+● Read(mlx-rs/mlx-rs/src/module/module.rs)
+  ⎿ Read 34 lines (ctrl+o to expand)
+
+● 第 274 行：**param = value; — 直接替换整个 Array。safetensors 文件中的 weight 是 bf16 的话，这里会正确替换。
+
+  但问题是：如果 safetensors 中的 key 名和模型参数的 key 名不匹配怎么办？不匹配的参数会保持初始的 f32 dtype！
+
+  让我检查一下名称匹配的情况。在 loader.rs 中加一个 debug 打印来确认 weight 的实际 dtype：
+
+● Read(mlx-ocr-2/src/loader.rs)
+  ⎿ Read 81 lines (ctrl+o to expand)
+
+● 让我加更多 debug 打印来检查所有 Linear weight 和 norm weight 的 dtype：
+
+● Edit(mlx-ocr-2/src/loader.rs)
+  ⎿ mlx-ocr-2/src/loader.rs with 9 additions and 3 removals
+
+     1        load_safetensors_sharded(&mut model, model_dir)?;
+     2 
+     3 -      // Debug: check RmsNorm weight dtype after loading
+     4 -      let norm_weight = &model.language_model.model.layers[0].input_layernorm.weight;
+     5 -      log::info!("RmsNorm weight dtype after loading: {:?}", norm_weight.dtype());
+     3 +      // Debug: check parameter dtypes after loading
+     4 +      let layer0 = &model.language_model.model.layers[0];
+     5 +      log::info!("Layer 0 dtypes after loading:");
+     6 +      log::info!("  input_layernorm.weight: {:?}", layer0.input_layernorm.weight.dtype());
+     7 +      log::info!("  q_proj.weight: {:?}", layer0.self_attn.q_proj.weight.dtype());
+     8 +      log::info!("  k_proj.weight: {:?}", layer0.self_attn.k_proj.weight.dtype());
+     9 +      log::info!("  gate_up_proj.weight: {:?}", layer0.mlp.gate_up_proj.weight.dtype());
+    10 +      log::info!("  down_proj.weight: {:?}", layer0.mlp.down_proj.weight.dtype());
+    11 +      log::info!("  post_self_attn_norm.weight: {:?}", layer0.post_self_attn_layernorm.weight.dtype());
+    12 
+    13        log::info!("Language model loaded ({} layers)", config.num_hidden_layers);
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2 && cargo build --release 2>&1 | tail -5)
+  ⎿ |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+    warning: `mlx-ocr-2` (lib) generated 2 warnings
+    ...+2 line (ctrl+o to expand)
+
+● Bash(pkill -f glm-ocr-server 2>/dev/null; sleep 1; cd /Users/…isy/develop/GLM-OCR/models/GLM-OCR-bf16 2>&1 | head -30)
+  ⎿ [2026-03-21T05:25:14Z INFO  glm_ocr_server] Loading model from /Users/daisy/develop/GLM-OCR/models/GLM-OCR-bf16
+    [2026-03-21T05:25:14Z INFO  mlx_ocr_2::loader] Loading config from
+    "/Users/daisy/develop/GLM-OCR/models/GLM-OCR-bf16/config.json"
+    ...+30 line (ctrl+o to expand)
+
+● 所有 weight 都是 Bfloat16！ weight 加载没有问题。
+
+  那 75% 的 vn_copy bf16→f32 是从哪来的？既然 weight 是 bf16、input 也应该是 bf16，为什么 gemv 选择了 f32 kernel？
+
+  关键发现：看你的 profile 数据——gemv_float32 占了 23%，sdpa_vector_float 占了 1%。这些全部是 f32 kernel。
+
+  这意味着 MLX 的 SDPA 在 f32 中执行（文档已确认：softmax 固定 f32），但 gemv 也在 f32 中执行，这说明 MLX 的 gemv（decode
+   时的矩阵向量乘）可能对 bf16 输入也在内部提升到 f32。
+
+  让我查证 MLX 对 bf16 gemv 的处理：
+
+● Search(MLX framework gemv bfloat16 float32 metal kernel type promotion matmul decode)
+  ⎿ Found 5 results for "MLX framework gemv bfloat16 float32 metal kernel type promotion matmul decode"
+
+● Search(pattern: "gemv.*bfloat|bfloat.*gemv|matmul.*float32|type_promo", path: "mlx-rs/mlx-sys/src/mlx-c/mlx")
+  ⎿ Found 0 matches 
+
+● Bash(ls /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/release/build/ | head -5)
+  ⎿ ahash-43c7f04f391145dd
+    ahash-66abd482456efe61
+    bindgen-2a00aac4dfaeb62e
+    ...+2 line (ctrl+o to expand)
+
+● Bash(ls /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/release/build/ | grep mlx)
+  ⎿ mlx-sys-237945f44f51532d
+    mlx-sys-6b7f36fd42f7e782
+
+● Bash(ls /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/)
+  ⎿ invoked.timestamp  out/               output             root-output        stderr
+
+● Bash(find /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/…/dev/null | xargs grep -l "gemv" 2>/dev/null | head -10)
+  ⎿ /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/include/mlx/backe
+    nd/metal/kernels/gemv_masked.h
+    /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/include/mlx/backe
+    ...+17 line (ctrl+o to expand)
+
+● Search(pattern: "bfloat|float32|type_promo|out_type|astype", p…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 8 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp)
+  ⎿ Read 31 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp)
+  ⎿ Read 61 lines (ctrl+o to expand)
+
+● 这里是 gemm，不是 gemv。让我找 gemv 的 dispatch 逻辑：
+
+● Search(pattern: "gemv.*float32|out_type.*gemv|gemv_kernel|gemv…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 1 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp)
+  ⎿ Read 81 lines (ctrl+o to expand)
+
+● 当 min(M, N) == 1 时走 gemv。Decode 时 seq_len=1，所以 M=1。让我看 gemv 函数的 dtype 处理：
+
+● Search(pattern: "^void gemv|^static void gemv", path: "mlx-ocr…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 1 lines (ctrl+o to expand)
+
+● Search(pattern: "^void gemv|void gemv\("", path: "mlx-ocr-2/ta…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 1 lines (ctrl+o to expand)
+
+● Search(pattern: "void gemv", path: "mlx-ocr-2/target/release/b…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 2 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp)
+  ⎿ Read 51 lines (ctrl+o to expand)
+
+● Read(mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp)
+  ⎿ Read 81 lines (ctrl+o to expand)
+
+● 关键！第 1090 行：kname << "gemv_t_" << type_to_name(out);
+
+  kernel 名字是基于 out.dtype() 决定的。让我看看 out 的 dtype 是怎么确定的：
+
+● Search(pattern: "type_to_name"", path: "mlx-ocr-2/target/relea…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 0 matches 
+
+● Search(pattern: "type_to_name", path: "mlx-ocr-2/target/releas…/out/build/_deps/mlx-src/mlx/backend/metal/matmul.cpp")
+  ⎿ Found 29 lines (ctrl+o to expand)
+
+● kernel 名字是 gemv_<out_dtype>。你看到的是 gemv_float32，说明 out.dtype() 是 float32。
+
+  现在关键问题是：matmul 的 output dtype 是怎么确定的？ 让我看 MLX 的 matmul op 定义：
+
+● Search(pattern: "Matmul.*eval\b|promote_types|result_type|out_…-237945f44f51532d/out/build/_deps/mlx-src/mlx/ops.cpp")
+  ⎿ Found 10 lines (ctrl+o to expand)
+
+● Search(pattern: "matmul\("", path: "mlx-ocr-2/target/release/b…-237945f44f51532d/out/build/_deps/mlx-src/mlx/ops.cpp")
+  ⎿ Found 0 matches 
+
+● Search(pattern: "matmul"", path: "mlx-ocr-2/target/release/bui…-237945f44f51532d/out/build/_deps/mlx-src/mlx/ops.cpp")
+  ⎿ Found 2 lines (ctrl+o to expand)
+
+● Search(pattern: "^array matmul"", path: "mlx-ocr-2/target/rele…-237945f44f51532d/out/build/_deps/mlx-src/mlx/ops.cpp")
+  ⎿ Found 0 matches 
+
+● Search(pattern: "matmul\(const"", path: "mlx-ocr-2/target/rele…-237945f44f51532d/out/build/_deps/mlx-src/mlx/ops.cpp")
+  ⎿ Found 0 matches 
+
+● Bash(grep -n "^array matmul\|^array mlx" /Users/daisy/develop…4f51532d/out/build/_deps/mlx-src/mlx/ops.cpp | head -10)
+  ⎿ 2957:array matmul(
+
+● Read(mlx-ocr-2/target/release/build/mlx-sys-237945f44f51532d/out/build/_deps/mlx-src/mlx/ops.cpp)
+  ⎿ Read 41 lines (ctrl+o to expand)
+
+● 第 2986 行找到了根因！
+
+  auto out_type = promote_types(a.dtype(), b.dtype());
+
+  matmul 的输出类型是 promote_types(a.dtype(), b.dtype())。如果两个输入都是 bf16，输出就是 bf16，gemv 就会用 bf16
+  kernel。
+
+  但你的 profile 显示 gemv 是 float32 kernel，说明 a 或 b 中有一个是 f32！
+
+  权重已经确认是 bf16。那么 input（隐藏状态）在某个地方被转成了 f32。
+
+  最可能的来源：SDPA 的输出是 f32（因为 softmax 固定 f32），然后这个 f32 的输出传给了 o_proj，之后 f32 一路传播到所有后续
+   Linear 层。
+
+  看 attention.rs 第 113-127 行的 SDPA → o_proj 流程：
+
+  let output = mlx_rs::fast::scaled_dot_product_attention(...)?;  // 输出可能是 f32
+  let output = output.transpose_axes(...)?.reshape(...)?;
+  self.o_proj.forward(&output)  // 如果 output 是 f32, o_proj 的 matmul 就是 f32
+
+  SDPA 输出 f32 → o_proj(f32 input × bf16 weight) → promote 到 f32 → 后续所有操作都在 f32。这就是 75% vn_copy 的原因！
+
+  修复方案：在 SDPA 输出后立即转回 bf16。
+
+> 继续 
+
+● Read(mlx-ocr-2/src/model/attention.rs)
+  ⎿ Read 21 lines (ctrl+o to expand)
+
+● 在 SDPA 输出后、传给 o_proj 之前，转回 bf16：
+
+● Edit(mlx-ocr-2/src/model/attention.rs)
+  ⎿ mlx-ocr-2/src/model/attention.rs with 2 additions
+
+    1            // Reshape back: [B, heads, L, head_dim] -> [B, L, heads * head_dim]
+    2 +          // SDPA outputs float32 (softmax is always f32), convert back to bf16
+    3            let output = output
+    4 +              .as_dtype(x.dtype())?
+    5                .transpose_axes(&[0, 2, 1, 3])?
+    6                .reshape(&[B, L, -1])?;
+    7 
+
+> 修复后运行测试。 
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust/mlx-ocr-2 && cargo build --release 2>&1 | tail -5)
+  ⎿ |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+    warning: `mlx-ocr-2` (lib) generated 2 warnings
+    ...+2 line (ctrl+o to expand)
+
+● Bash(pkill -f glm-ocr-server 2>/dev/null; sleep 1; cd /Users/…r /Users/daisy/develop/GLM-OCR/models/GLM-OCR-bf16 2>&1)
+  ⎿ 🔄 Command moved to background.
+
+● Bash(bash -c 'for i in {1..20}; do sleep 2; if curl -s http:/… echo "Server ready"; exit 0; fi; done; echo "TIMEOUT"')
+  ⎿ Server ready
+
+● Bash(cd /Users/daisy/develop/GLM-OCR/rust && python test_ocr.py 2>&1)
+  ⎿ Sending OCR request for exam2.png ...
+    ============================================================
+    命题人：孙永红
+    ...+57 line (ctrl+o to expand)
+
+● 输出正确。看一下 server 日志中的 TPS：
+
+● 111.4 tok/s！ 之前是 30.8 tok/s。
+
+  提升了 3.6 倍。从 ~35 TPS 跳到 111 TPS。
+
+  原因就是 SDPA 输出 f32 后一路传播，导致所有后续 Linear 层的 gemv 都在 f32 下执行。加了一行 .as_dtype(x.dtype())? 转回
+  bf16 后，所有 gemv 都用 bf16 kernel 了。
+
+> /export 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
