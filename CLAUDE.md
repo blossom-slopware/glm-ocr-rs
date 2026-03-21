@@ -35,3 +35,5 @@ You are not allowed to patch mlx-rs source code. You are only allowed to patch b
 If an optimization does not improve TPS, it is NOT an optimization, not some "marginal optimization".
 
 You are NOT ALLOWED to write any document unless explicitly asked so
+
+If I tell you explicitly to do X, it is FORBIDDEN for you to "suggest me to do Y because Y is simpler". You will be HARSHLY PUNISHED for bringing up such nonsense questions.
