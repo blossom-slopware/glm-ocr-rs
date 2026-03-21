@@ -34,36 +34,20 @@ git submodule update --init --recursive
 cargo build --release -p glm-ocr-rs
 ```
 
-The build process will:
-1. Compile the MLX C bindings (mlx-c) via CMake
-2. Compile the Rust MLX bindings (mlx-rs)
-3. Build the glm-ocr-rs library and server binary
-
-The compiled server binary will be at:
-```
-./glm-ocr-rs/target/release/glm-ocr-server
-```
-
 ## Run
 
 ### Start the Server
 
 ```bash
 RUST_LOG=info cargo run -r --bin glm-ocr-server -- \
-    --model-dir /Users/daisy/develop/GLM-OCR/models/GLM-OCR-bf16 \
+    --model-dir /path/to/model \
     --port 8080
 ```
-
-The server will:
-1. Load model weights from `--model-dir` (requires config.json, tokenizer.json, model.safetensors)
-2. Start HTTP server on specified host:port
-3. Log initialization progress
-
 
 ### Test with Script
 
 ```bash
-python /Users/daisy/develop/GLM-OCR/ocr-inference/test_ocr.py
+python test_ocr.py
 ```
 
 Image URLs can be:
@@ -81,7 +65,7 @@ Image URLs can be:
 cargo clean && cargo build --release -p glm-ocr-rs --features gpu-capture
 ```
 
-### 3. Run with capture enabled
+### 2. Run with capture enabled
 
 Run:
 
@@ -96,7 +80,7 @@ Send a request to trigger the decode loop, then open the trace in Xcode:
 open /tmp/decode.gputrace
 ```
 
-### 4. Analyze in Xcode
+### 3. Analyze in Xcode
 
 1. Check **"Profile after replay"**
 2. Click **"Replay"**
