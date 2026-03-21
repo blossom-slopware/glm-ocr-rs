@@ -780,6 +780,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "glm-ocr-rs"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "env_logger",
+ "futures",
+ "image",
+ "log",
+ "minijinja",
+ "minijinja-contrib",
+ "mlx-rs",
+ "mlx-sys",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+ "uuid",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1371,30 +1395,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "mlx-ocr-2"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "env_logger",
- "futures",
- "image",
- "log",
- "minijinja",
- "minijinja-contrib",
- "mlx-rs",
- "mlx-sys",
- "reqwest",
- "serde",
- "serde_json",
- "tokenizers",
- "tokio",
- "tokio-stream",
- "tower-http",
- "uuid",
 ]
 
 [[package]]

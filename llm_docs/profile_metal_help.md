@@ -28,7 +28,7 @@ let dst = config.build();
 ### 2. 重新编译
 
 ```bash
-cd mlx-ocr-2
+cd glm-ocr-rs
 cargo clean
 cargo build --release
 ```

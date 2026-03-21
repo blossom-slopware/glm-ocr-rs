@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use mlx_ocr_2::full_model::Model;
-use mlx_ocr_2::image_processor::ImageProcessor;
-use mlx_ocr_2::ocr::{OcrEngine, OcrService};
-use mlx_ocr_2::server::{build_router, AppState};
-use mlx_ocr_2::tokenizer::GlmTokenizer;
+use glm_ocr_rs::full_model::Model;
+use glm_ocr_rs::image_processor::ImageProcessor;
+use glm_ocr_rs::ocr::{OcrEngine, OcrService};
+use glm_ocr_rs::server::{build_router, AppState};
+use glm_ocr_rs::tokenizer::GlmTokenizer;
 
 struct Args {
     model_dir: String,

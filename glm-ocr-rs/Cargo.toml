@@ -1,5 +1,5 @@
 [package]
-name = "mlx-ocr-2"
+name = "glm-ocr-rs"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,7 +8,7 @@ name = "glm-ocr-server"
 path = "src/main.rs"
 
 [lib]
-name = "mlx_ocr_2"
+name = "glm_ocr_rs"
 crate-type = ["rlib"]
 
 [dependencies]
