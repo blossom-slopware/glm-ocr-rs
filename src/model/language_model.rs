@@ -5,7 +5,6 @@ use mlx_rs::{
     module::Module,
     nn, Array,
 };
-use mlx_lm::cache::KeyValueCache;
 
 use crate::cache::KVCache;
 use crate::config::TextConfig;
@@ -34,22 +33,22 @@ impl LanguageModel {
     /// inputs: [batch, seq_len]
     /// position_ids: [3, batch, seq_len]
     /// cache: per-layer KV caches (empty slice = no cache)
-    pub fn forward_with_positions<C: KeyValueCache>(
+    pub fn forward_with_positions(
         &mut self,
         inputs: &Array,
         position_ids: &Array,
-        cache: &mut [C],
+        cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         let hidden = self.model.forward_with_positions(inputs, position_ids, None, cache)?;
         self.lm_head.forward(&hidden)
     }
 
     /// Forward pass with pre-computed embeddings.
-    pub fn forward_with_embeds<C: KeyValueCache>(
+    pub fn forward_with_embeds(
         &mut self,
         inputs_embeds: &Array,
         position_ids: &Array,
-        cache: &mut [C],
+        cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         let hidden = self.model.forward_with_embeds(inputs_embeds, position_ids, None, cache)?;
         self.lm_head.forward(&hidden)
@@ -73,20 +72,20 @@ impl GlmOcrModel {
         })
     }
 
-    pub fn forward<C: KeyValueCache>(
+    pub fn forward(
         &mut self,
         inputs: &Array,
         position_ids: &Array,
-        cache: &mut [C],
+        cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         self.language_model.forward_with_positions(inputs, position_ids, cache)
     }
 
-    pub fn forward_with_embeds<C: KeyValueCache>(
+    pub fn forward_with_embeds(
         &mut self,
         inputs_embeds: &Array,
         position_ids: &Array,
-        cache: &mut [C],
+        cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         self.language_model.forward_with_embeds(inputs_embeds, position_ids, cache)
     }

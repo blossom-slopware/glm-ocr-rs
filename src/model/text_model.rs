@@ -5,8 +5,8 @@ use mlx_rs::{
     module::Module,
     nn, Array,
 };
-use mlx_lm::cache::KeyValueCache;
 
+use crate::cache::KVCache;
 use crate::config::TextConfig;
 use super::decoder::{DecoderLayerInput, GlmOcrDecoderLayer};
 use super::mrope::GlmOcrRotaryEmbedding;
@@ -52,12 +52,12 @@ impl GlmOcrTextModel {
     /// inputs: [batch, seq_len] token ids
     /// position_ids: [3, batch, seq_len]
     /// cache: per-layer KV caches
-    pub fn forward_with_positions<C: KeyValueCache>(
+    pub fn forward_with_positions(
         &mut self,
         inputs: &Array,
         position_ids: &Array,
         mask: Option<&Array>,
-        cache: &mut [C],
+        cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         let mut h = self.embed_tokens.forward(inputs)?;
 
@@ -98,12 +98,12 @@ impl GlmOcrTextModel {
     /// Forward pass with pre-computed embeddings (skips embed_tokens).
     /// inputs_embeds: [batch, seq_len, hidden_size]
     /// position_ids: [3, batch, seq_len]
-    pub fn forward_with_embeds<C: KeyValueCache>(
+    pub fn forward_with_embeds(
         &mut self,
         inputs_embeds: &Array,
         position_ids: &Array,
         mask: Option<&Array>,
-        cache: &mut [C],
+        cache: &mut [KVCache],
     ) -> Result<Array, Exception> {
         let mut h = inputs_embeds.clone();
 

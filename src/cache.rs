@@ -1,7 +1,6 @@
 use mlx_rs::error::Exception;
 use mlx_rs::ops::{self, concatenate_axis, indexing::{Ellipsis, IndexMutOp, IndexOp}};
 use mlx_rs::Array;
-use mlx_lm::cache::KeyValueCache;
 
 /// Pre-allocated KV Cache that grows in fixed-size steps.
 ///
@@ -39,18 +38,16 @@ impl KVCache {
     pub fn values(&self) -> &Array {
         &self.values
     }
-}
 
-impl KeyValueCache for KVCache {
-    fn offset(&self) -> i32 {
+    pub fn offset(&self) -> i32 {
         self.offset
     }
 
-    fn max_size(&self) -> Option<i32> {
+    pub fn max_size(&self) -> Option<i32> {
         None
     }
 
-    fn update_and_fetch(
+    pub fn update_and_fetch(
         &mut self,
         keys: Array,
         values: Array,

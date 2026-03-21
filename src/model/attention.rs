@@ -5,8 +5,8 @@ use mlx_rs::{
     module::Module,
     nn, Array,
 };
-use mlx_lm::cache::KeyValueCache;
 
+use crate::cache::KVCache;
 use crate::config::TextConfig;
 use super::AttentionMask;
 use super::mrope::apply_rotary_pos_emb;
@@ -62,19 +62,19 @@ impl GlmOcrAttention {
     }
 }
 
-pub struct AttentionInput<'a, C> {
+pub struct AttentionInput<'a> {
     pub x: &'a Array,
     pub mask: &'a AttentionMask,
-    pub cache: &'a mut C,
+    pub cache: &'a mut KVCache,
     pub position_embeddings: (&'a Array, &'a Array), // (cos, sin)
 }
 
-impl<C: KeyValueCache> Module<AttentionInput<'_, C>> for GlmOcrAttention {
+impl Module<AttentionInput<'_>> for GlmOcrAttention {
     type Output = Array;
     type Error = Exception;
 
     #[allow(non_snake_case)]
-    fn forward(&mut self, input: AttentionInput<'_, C>) -> Result<Array, Exception> {
+    fn forward(&mut self, input: AttentionInput<'_>) -> Result<Array, Exception> {
         let AttentionInput {
             x,
             mask,

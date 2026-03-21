@@ -5,8 +5,8 @@ use mlx_rs::{
     module::Module,
     nn, Array,
 };
-use mlx_lm::cache::KeyValueCache;
 
+use crate::cache::KVCache;
 use crate::config::TextConfig;
 use super::attention::{AttentionInput, GlmOcrAttention};
 use super::mlp::GlmOcrMlp;
@@ -56,18 +56,18 @@ impl GlmOcrDecoderLayer {
     }
 }
 
-pub struct DecoderLayerInput<'a, C> {
+pub struct DecoderLayerInput<'a> {
     pub x: &'a Array,
     pub mask: &'a AttentionMask,
-    pub cache: &'a mut C,
+    pub cache: &'a mut KVCache,
     pub position_embeddings: (&'a Array, &'a Array),
 }
 
-impl<C: KeyValueCache> Module<DecoderLayerInput<'_, C>> for GlmOcrDecoderLayer {
+impl Module<DecoderLayerInput<'_>> for GlmOcrDecoderLayer {
     type Output = Array;
     type Error = Exception;
 
-    fn forward(&mut self, input: DecoderLayerInput<'_, C>) -> Result<Array, Exception> {
+    fn forward(&mut self, input: DecoderLayerInput<'_>) -> Result<Array, Exception> {
         let DecoderLayerInput {
             x,
             mask,
