@@ -65,7 +65,7 @@ impl GlmOcrAttention {
 pub struct AttentionInput<'a, C> {
     pub x: &'a Array,
     pub mask: &'a AttentionMask,
-    pub cache: Option<&'a mut C>,
+    pub cache: &'a mut C,
     pub position_embeddings: (&'a Array, &'a Array), // (cos, sin)
 }
 
@@ -78,7 +78,7 @@ impl<C: KeyValueCache> Module<AttentionInput<'_, C>> for GlmOcrAttention {
         let AttentionInput {
             x,
             mask,
-            mut cache,
+            cache,
             position_embeddings: (cos, sin),
         } = input;
 
@@ -104,12 +104,10 @@ impl<C: KeyValueCache> Module<AttentionInput<'_, C>> for GlmOcrAttention {
         // Apply rotary embeddings
         let (queries, mut keys) = apply_rotary_pos_emb(&queries, &keys, cos, sin)?;
 
-        // Update KV cache if present
-        if let Some(c) = cache.as_mut() {
-            let (k, v) = c.update_and_fetch(keys, values)?;
-            keys = k;
-            values = v;
-        }
+        // Update KV cache
+        let (k, v) = cache.update_and_fetch(keys, values)?;
+        keys = k;
+        values = v;
 
         // Scaled dot-product attention
         let output = mlx_rs::fast::scaled_dot_product_attention(

@@ -12,8 +12,8 @@ const STEP: i32 = 256;
 
 #[derive(Debug, Clone)]
 pub struct KVCache {
-    keys: Option<Array>,
-    values: Option<Array>,
+    keys: Array,
+    values: Array,
     offset: i32,
 }
 
@@ -26,18 +26,18 @@ impl Default for KVCache {
 impl KVCache {
     pub fn new() -> Self {
         Self {
-            keys: None,
-            values: None,
+            keys: Array::from_f32(0.0),
+            values: Array::from_f32(0.0),
             offset: 0,
         }
     }
 
-    pub fn keys(&self) -> Option<&Array> {
-        self.keys.as_ref()
+    pub fn keys(&self) -> &Array {
+        &self.keys
     }
 
-    pub fn values(&self) -> Option<&Array> {
-        self.values.as_ref()
+    pub fn values(&self) -> &Array {
+        &self.values
     }
 }
 
@@ -59,9 +59,10 @@ impl KeyValueCache for KVCache {
         let new_seq_len = keys.shape()[keys.ndim() - 2];
 
         // Check if we need to grow the buffer
-        let need_grow = match &self.keys {
-            None => true,
-            Some(k) => (prev + new_seq_len) > k.shape()[k.ndim() - 2],
+        let need_grow = if self.keys.ndim() == 0 {
+            true
+        } else {
+            (prev + new_seq_len) > self.keys.shape()[self.keys.ndim() - 2]
         };
 
         if need_grow {
@@ -83,8 +84,10 @@ impl KeyValueCache for KVCache {
             let new_k = ops::zeros_dtype(&new_k_shape, keys.dtype())?;
             let new_v = ops::zeros_dtype(&new_v_shape, values.dtype())?;
 
-            if let (Some(old_k), Some(old_v)) = (self.keys.take(), self.values.take()) {
+            if self.keys.ndim() != 0 {
                 // Trim existing buffer to actual content if needed
+                let old_k = std::mem::replace(&mut self.keys, Array::from_f32(0.0));
+                let old_v = std::mem::replace(&mut self.values, Array::from_f32(0.0));
                 let old_cap = old_k.shape()[old_k.ndim() - 2];
                 let trimmed_k = if prev != old_cap {
                     old_k.index((Ellipsis, ..prev, ..))
@@ -96,11 +99,11 @@ impl KeyValueCache for KVCache {
                 } else {
                     old_v
                 };
-                self.keys = Some(concatenate_axis(&[trimmed_k, new_k], -2)?);
-                self.values = Some(concatenate_axis(&[trimmed_v, new_v], -2)?);
+                self.keys = concatenate_axis(&[trimmed_k, new_k], -2)?;
+                self.values = concatenate_axis(&[trimmed_v, new_v], -2)?;
             } else {
-                self.keys = Some(new_k);
-                self.values = Some(new_v);
+                self.keys = new_k;
+                self.values = new_v;
             }
         }
 
@@ -108,19 +111,19 @@ impl KeyValueCache for KVCache {
         self.offset = prev + new_seq_len;
         let end = self.offset;
 
-        self.keys.as_mut().unwrap().index_mut(
+        self.keys.index_mut(
             (Ellipsis, prev..end, ..),
             &keys,
         );
-        self.values.as_mut().unwrap().index_mut(
+        self.values.index_mut(
             (Ellipsis, prev..end, ..),
             &values,
         );
 
         // Return the filled portion
         Ok((
-            self.keys.as_ref().unwrap().index((Ellipsis, ..end, ..)),
-            self.values.as_ref().unwrap().index((Ellipsis, ..end, ..)),
+            self.keys.index((Ellipsis, ..end, ..)),
+            self.values.index((Ellipsis, ..end, ..)),
         ))
     }
 }

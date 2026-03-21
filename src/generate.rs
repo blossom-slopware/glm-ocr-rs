@@ -49,7 +49,7 @@ pub struct GenerateSummary {
 }
 
 pub struct GenerateState {
-    pub cache: Vec<Option<KVCache>>,
+    pub cache: Vec<KVCache>,
     pub generated_tokens: Vec<i32>,
     pub stream: Stream,
 }
@@ -195,7 +195,7 @@ pub fn decode_next(
     }
 
     with_new_default_stream(state.stream.clone(), || {
-        let cache_offset = state.cache[0].as_ref().map(|c| c.offset()).unwrap_or(0);
+        let cache_offset = state.cache[0].offset();
         let current_token = *state.generated_tokens.last().unwrap();
 
         let y_input = Array::from_int(current_token).reshape(&[1, 1])?;

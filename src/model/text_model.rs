@@ -57,7 +57,7 @@ impl GlmOcrTextModel {
         inputs: &Array,
         position_ids: &Array,
         mask: Option<&Array>,
-        cache: &mut [Option<C>],
+        cache: &mut [C],
     ) -> Result<Array, Exception> {
         let mut h = self.embed_tokens.forward(inputs)?;
 
@@ -87,7 +87,7 @@ impl GlmOcrTextModel {
             h = layer.forward(DecoderLayerInput {
                 x: &h,
                 mask,
-                cache: c.as_mut(),
+                cache: c,
                 position_embeddings: (&cos, &sin),
             })?;
         }
@@ -103,7 +103,7 @@ impl GlmOcrTextModel {
         inputs_embeds: &Array,
         position_ids: &Array,
         mask: Option<&Array>,
-        cache: &mut [Option<C>],
+        cache: &mut [C],
     ) -> Result<Array, Exception> {
         let mut h = inputs_embeds.clone();
 
@@ -133,7 +133,7 @@ impl GlmOcrTextModel {
             h = layer.forward(DecoderLayerInput {
                 x: &h,
                 mask,
-                cache: c.as_mut(),
+                cache: c,
                 position_embeddings: (&cos, &sin),
             })?;
         }

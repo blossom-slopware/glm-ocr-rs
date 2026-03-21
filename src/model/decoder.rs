@@ -59,7 +59,7 @@ impl GlmOcrDecoderLayer {
 pub struct DecoderLayerInput<'a, C> {
     pub x: &'a Array,
     pub mask: &'a AttentionMask,
-    pub cache: Option<&'a mut C>,
+    pub cache: &'a mut C,
     pub position_embeddings: (&'a Array, &'a Array),
 }
 

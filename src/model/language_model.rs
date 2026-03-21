@@ -38,7 +38,7 @@ impl LanguageModel {
         &mut self,
         inputs: &Array,
         position_ids: &Array,
-        cache: &mut [Option<C>],
+        cache: &mut [C],
     ) -> Result<Array, Exception> {
         let hidden = self.model.forward_with_positions(inputs, position_ids, None, cache)?;
         self.lm_head.forward(&hidden)
@@ -49,7 +49,7 @@ impl LanguageModel {
         &mut self,
         inputs_embeds: &Array,
         position_ids: &Array,
-        cache: &mut [Option<C>],
+        cache: &mut [C],
     ) -> Result<Array, Exception> {
         let hidden = self.model.forward_with_embeds(inputs_embeds, position_ids, None, cache)?;
         self.lm_head.forward(&hidden)
@@ -77,7 +77,7 @@ impl GlmOcrModel {
         &mut self,
         inputs: &Array,
         position_ids: &Array,
-        cache: &mut [Option<C>],
+        cache: &mut [C],
     ) -> Result<Array, Exception> {
         self.language_model.forward_with_positions(inputs, position_ids, cache)
     }
@@ -86,7 +86,7 @@ impl GlmOcrModel {
         &mut self,
         inputs_embeds: &Array,
         position_ids: &Array,
-        cache: &mut [Option<C>],
+        cache: &mut [C],
     ) -> Result<Array, Exception> {
         self.language_model.forward_with_embeds(inputs_embeds, position_ids, cache)
     }
@@ -97,7 +97,7 @@ impl GlmOcrModel {
     }
 
     /// Create a cache vector for this model with initialized entries.
-    pub fn new_cache(&self) -> Vec<Option<KVCache>> {
-        (0..self.num_layers).map(|_| Some(KVCache::new())).collect()
+    pub fn new_cache(&self) -> Vec<KVCache> {
+        (0..self.num_layers).map(|_| KVCache::new()).collect()
     }
 }
