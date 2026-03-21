@@ -13,6 +13,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 mlx-rs = { path = "../mlx-rs/mlx-rs", features = ["safetensors"] }
+mlx-sys = { path = "../mlx-rs/mlx-sys" }
 tokenizers = { path = "../tokenizers/tokenizers", default-features = false, features = ["onig"] }
 
 serde = { version = "1", features = ["derive"] }

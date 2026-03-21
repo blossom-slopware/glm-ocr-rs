@@ -55,6 +55,17 @@ pub fn load_glm_ocr_model(
     let config = load_config(model_dir)?;
     let mut model = GlmOcrModel::new(&config)?;
     load_safetensors_sharded(&mut model, model_dir)?;
+    
+    // Debug: check parameter dtypes after loading
+    let layer0 = &model.language_model.model.layers[0];
+    log::info!("Layer 0 dtypes after loading:");
+    log::info!("  input_layernorm.weight: {:?}", layer0.input_layernorm.weight.dtype());
+    log::info!("  q_proj.weight: {:?}", layer0.self_attn.q_proj.weight.dtype());
+    log::info!("  k_proj.weight: {:?}", layer0.self_attn.k_proj.weight.dtype());
+    log::info!("  gate_up_proj.weight: {:?}", layer0.mlp.gate_up_proj.weight.dtype());
+    log::info!("  down_proj.weight: {:?}", layer0.mlp.down_proj.weight.dtype());
+    log::info!("  post_self_attn_norm.weight: {:?}", layer0.post_self_attn_layernorm.weight.dtype());
+    
     log::info!("Language model loaded ({} layers)", config.num_hidden_layers);
     Ok(model)
 }

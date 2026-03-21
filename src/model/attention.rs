@@ -120,7 +120,9 @@ impl Module<AttentionInput<'_>> for GlmOcrAttention {
         )?;
 
         // Reshape back: [B, heads, L, head_dim] -> [B, L, heads * head_dim]
+        // SDPA outputs float32 (softmax is always f32), convert back to bf16
         let output = output
+            .as_dtype(x.dtype())?
             .transpose_axes(&[0, 2, 1, 3])?
             .reshape(&[B, L, -1])?;
 

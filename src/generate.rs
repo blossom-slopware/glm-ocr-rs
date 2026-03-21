@@ -256,9 +256,21 @@ where
 
     // Phase 3: Decode loop
     for _ in 1..config.max_tokens {
+        // GPU capture: record 1 decode step (tokens 10..11)
+        if emitted_tokens == 10 {
+            let path = std::ffi::CString::new("/tmp/decode.gputrace").unwrap();
+            let ret = unsafe { mlx_sys::mlx_metal_start_capture(path.as_ptr()) };
+            log::info!("GPU capture started (ret={}), recording decode step...", ret);
+        }
+
         let next_token_id = decode_next(model, &mut state, config, abort)?;
         on_token(next_token_id)?;
         emitted_tokens += 1;
+
+        if emitted_tokens == 12 {
+            let ret = unsafe { mlx_sys::mlx_metal_stop_capture() };
+            log::info!("GPU capture stopped (ret={}). Trace at /tmp/decode.gputrace", ret);
+        }
 
         if config.stop_tokens.contains(&next_token_id) {
             stopped_by_stop_token = true;

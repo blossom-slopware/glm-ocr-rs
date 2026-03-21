@@ -110,43 +110,29 @@ pub fn rotate_half_llm(x: &Array) -> Result<Array, Exception> {
     let shape = x.shape().to_vec();
     let last_dim = *shape.last().unwrap();
 
-    // x1 = x[..., 0::2] (even indices), x2 = x[..., 1::2] (odd indices)
     let x1 = x.index((Ellipsis, (..).stride_by(2)));
     let x2 = x.index((Ellipsis, (1..).stride_by(2)));
 
     let neg_x2 = ops::negative(&x2)?;
 
-    // Stack [-x2, x1] on new last axis, then flatten last 2 dims
-    // neg_x2, x1 each [..., half_dim]
-    // stack on axis -1 -> [..., half_dim, 2]
-    let neg_x2_exp = ops::expand_dims(neg_x2, -1)?;
-    let x1_exp = ops::expand_dims(x1, -1)?;
-    let stacked = ops::concatenate_axis(&[&neg_x2_exp, &x1_exp], -1)?;
-
-    // Reshape to [..., head_dim]
+    // stack [-x2, x1] on new last axis -> [..., half_dim, 2], then reshape to [..., head_dim]
+    let stacked = ops::stack_axis(&[&neg_x2, &x1], -1)?;
     let mut new_shape = shape[..shape.len() - 1].to_vec();
     new_shape.push(last_dim);
     stacked.reshape(&new_shape)
 }
 
-/// repeat_interleave: [a,b,c] with repeats=2 -> [a,a,b,b,c,c] along given axis
-pub fn repeat_interleave(x: &Array, repeats: i32, axis: i32) -> Result<Array, Exception> {
+/// repeat_interleave: [a,b,c] with repeats=2 -> [a,a,b,b,c,c] along last axis.
+/// Uses stack+reshape (2 ops) instead of expand_dims+tile+reshape (3 ops).
+pub fn repeat_interleave_last(x: &Array) -> Result<Array, Exception> {
     let shape = x.shape().to_vec();
-    let ndim = shape.len() as i32;
-    let axis_pos = if axis >= 0 { axis } else { ndim + axis } as usize;
-
-    // expand_dims at axis+1
-    let x = ops::expand_dims(x, axis_pos as i32 + 1)?;
-
-    // tile along the new axis
-    let mut tile_shape: Vec<i32> = vec![1; x.ndim()];
-    tile_shape[axis_pos + 1] = repeats;
-    let x = ops::tile(&x, &tile_shape)?;
-
-    // reshape to merge the repeated axis back
-    let mut new_shape = shape.clone();
-    new_shape[axis_pos] *= repeats;
-    x.reshape(&new_shape)
+    let ndim = shape.len();
+    // stack x with itself on a new last axis: [..., n] -> [..., n, 2]
+    let stacked = ops::stack_axis(&[x, x], -1)?;
+    // reshape [..., n, 2] -> [..., n*2]
+    let mut new_shape = shape[..ndim - 1].to_vec();
+    new_shape.push(shape[ndim - 1] * 2);
+    stacked.reshape(&new_shape)
 }
 
 /// Apply rotary position embeddings to queries and keys.
@@ -166,9 +152,9 @@ pub fn apply_rotary_pos_emb(
     let half = cos.dim(-1) / 2;
     // Take first half, then repeat_interleave with 2
     let cos_half = cos.index((Ellipsis, ..half));
-    let cos_full = repeat_interleave(&cos_half, 2, -1)?;
+    let cos_full = repeat_interleave_last(&cos_half)?;
     let sin_half = sin.index((Ellipsis, ..half));
-    let sin_full = repeat_interleave(&sin_half, 2, -1)?;
+    let sin_full = repeat_interleave_last(&sin_half)?;
 
     let rotary_dim = cos_full.dim(-1);
 

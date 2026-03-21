@@ -28,8 +28,8 @@ pub fn apply_top_p(logprobs: &Array, top_p: f32) -> Result<Array, Exception> {
     };
     let cumulative_probs_orig = take_along_axis(&cumulative_probs, &inverse_indices, -1)?;
 
-    let neg_inf = Array::from_f32(f32::NEG_INFINITY);
-    let threshold = Array::from_f32(1.0 - top_p);
+    let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
+    let threshold = Array::from_f32(1.0 - top_p).as_dtype(Dtype::Bfloat16)?;
     let mask = cumulative_probs_orig.gt(&threshold)?;
     ops::which(&mask, logprobs, &neg_inf)
 }
@@ -43,13 +43,13 @@ pub fn apply_min_p(logprobs: &Array, min_p: f32, min_tokens_to_keep: i32) -> Res
 
     // Top logprob (index 0 of sorted)
     let top_logprobs = sorted_logprobs.index((.., 0..1));
-    let scaled_min_p = &top_logprobs + Array::from_f32(min_p.ln());
+    let scaled_min_p = &top_logprobs + Array::from_f32(min_p.ln()).as_dtype(Dtype::Bfloat16)?;
 
     // Mask tokens below threshold
     let tokens_to_remove = sorted_logprobs.lt(&scaled_min_p)?;
 
     // Always keep at least min_tokens_to_keep
-    let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+    let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
     let num_classes = logprobs.shape().last().copied().unwrap_or(1);
 
     // Build mask: set first min_tokens_to_keep positions to false (keep them)
@@ -91,7 +91,7 @@ pub fn apply_top_k(logprobs: &Array, top_k: i32) -> Result<Array, Exception> {
     let num_classes = logprobs.shape().last().copied().unwrap_or(1);
     let mask_indices = partitioned_indices.index((.., top_k..num_classes));
 
-    let neg_inf = Array::from_f32(f32::NEG_INFINITY);
+    let neg_inf = Array::from_f32(f32::NEG_INFINITY).as_dtype(Dtype::Bfloat16)?;
     put_along_axis(logprobs, &mask_indices, &neg_inf, -1)
 }
 
@@ -116,8 +116,8 @@ pub fn apply_repetition_penalty(
     // Gather logits at token positions
     let selected_logits = take_along_axis(logits, &token_indices.reshape(&[1, -1])?, -1)?;
 
-    let penalty_arr = Array::from_f32(penalty);
-    let zero = Array::from_f32(0.0);
+    let penalty_arr = Array::from_f32(penalty).as_dtype(Dtype::Bfloat16)?;
+    let zero = Array::from_f32(0.0).as_dtype(Dtype::Bfloat16)?;
     let is_negative = selected_logits.lt(&zero)?;
 
     // Negative logits get multiplied by penalty (more negative), positive get divided
@@ -158,7 +158,7 @@ pub fn sample_token(
     }
 
     // Scale by temperature and sample
-    let inv_temp = Array::from_f32(1.0 / temperature);
+    let inv_temp = Array::from_f32(1.0 / temperature).as_dtype(Dtype::Bfloat16)?;
     let scaled = ops::multiply(&lp, &inv_temp)?;
     mlx_rs::random::categorical(&scaled, None, None, None)
 }
