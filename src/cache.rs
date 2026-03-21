@@ -1,34 +1,7 @@
 use mlx_rs::error::Exception;
 use mlx_rs::ops::{self, concatenate_axis, indexing::{Ellipsis, IndexMutOp, IndexOp}};
 use mlx_rs::Array;
-
-/// Trait for key-value cache implementations used in attention layers.
-///
-/// This trait mirrors the Python mlx-lm's `KVCache` interface.
-pub trait KeyValueCache {
-    fn offset(&self) -> i32;
-
-    fn max_size(&self) -> Option<i32>;
-
-    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<(Array, Array), Exception>;
-}
-
-impl<T> KeyValueCache for &'_ mut T
-where
-    T: KeyValueCache,
-{
-    fn offset(&self) -> i32 {
-        T::offset(self)
-    }
-
-    fn max_size(&self) -> Option<i32> {
-        T::max_size(self)
-    }
-
-    fn update_and_fetch(&mut self, keys: Array, values: Array) -> Result<(Array, Array), Exception> {
-        T::update_and_fetch(self, keys, values)
-    }
-}
+use mlx_lm::cache::KeyValueCache;
 
 /// Pre-allocated KV Cache that grows in fixed-size steps.
 ///
