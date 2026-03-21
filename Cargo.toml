@@ -13,7 +13,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 mlx-rs = { path = "../mlx-rs/mlx-rs", features = ["safetensors"] }
-mlx-sys = { path = "../mlx-rs/mlx-sys" }
+mlx-sys = { path = "../mlx-rs/mlx-sys", optional = true }
 tokenizers = { path = "../tokenizers/tokenizers", default-features = false, features = ["onig"] }
 
 serde = { version = "1", features = ["derive"] }
@@ -37,3 +37,6 @@ minijinja-contrib = { version = "2", features = ["pycompat"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["blocking"] }
+
+[features]
+gpu-capture = ["dep:mlx-sys", "mlx-sys/metal-debug"]
