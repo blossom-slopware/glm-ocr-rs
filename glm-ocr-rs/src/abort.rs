@@ -9,7 +9,7 @@ impl AbortSignal {
         AbortSignal(Arc::new(AtomicBool::new(false)))
     }
 
-    /// Create a signal that is never set — used by `generate()` wrapper.
+    /// Create a signal that is never set -- used by `generate()` wrapper.
     pub fn none() -> Self {
         AbortSignal::new()
     }

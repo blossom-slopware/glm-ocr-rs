@@ -3,10 +3,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::oneshot;
 
-use super::abort::AbortSignal;
-use super::engine::OcrEngine;
-use super::error::{EngineError, OcrError, ServiceStateKind, ServiceStatusSnapshot};
-use super::request::{OcrRequest, OcrRunResult};
+use glm_ocr_rs::abort::AbortSignal;
+use glm_ocr_rs::engine::{EngineError, OcrEngine};
+
+use crate::error::{OcrError, ServiceStateKind, ServiceStatusSnapshot};
+use crate::request::{OcrRequest, OcrRunResult};
 
 enum ServiceState {
     Idle,
@@ -135,7 +136,7 @@ impl OcrService {
         matches!(self.status().state, ServiceStateKind::Busy)
     }
 
-    // ── Internal ──
+    // -- Internal --
 
     /// Spawn a blocking task to run the given request on the engine.
     fn start_request(
@@ -235,7 +236,7 @@ fn finalize_and_drain(
         return;
     }
 
-    // Not faulted — check if there's a pending request to pick up.
+    // Not faulted -- check if there's a pending request to pick up.
     let next = {
         let mut pend = lock_mutex(pending);
         pend.take()
@@ -244,7 +245,7 @@ fn finalize_and_drain(
     match next {
         Some(next_req) => {
             // Stay Busy, start the next request.
-            log::info!("Draining pending request — starting next OCR inference");
+            log::info!("Draining pending request -- starting next OCR inference");
             {
                 let mut ca = lock_mutex(current_abort);
                 *ca = Some(next_req.abort.clone());
@@ -282,7 +283,7 @@ fn finalize_and_drain(
             );
         }
         None => {
-            // No pending — go idle.
+            // No pending -- go idle.
             let mut state_guard = lock_mutex(state);
             *state_guard = ServiceState::Idle;
             let mut ca = lock_mutex(current_abort);
@@ -307,8 +308,11 @@ fn run_engine_request(
         }
     };
 
-    match panic::catch_unwind(AssertUnwindSafe(|| engine.run(req, abort, on_text_chunk))) {
-        Ok(result) => result,
+    let input = req.to_inference_input();
+
+    match panic::catch_unwind(AssertUnwindSafe(|| engine.run(&input, abort, on_text_chunk))) {
+        Ok(Ok(result)) => Ok(result.into()),
+        Ok(Err(e)) => Err(e),
         Err(payload) => Err(EngineError::WorkerPanic {
             message: panic_payload_to_string(payload),
         }),

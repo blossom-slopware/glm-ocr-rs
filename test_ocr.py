@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 
 API_URL = "http://127.0.0.1:8080/ocr/stream"
-IMAGE_PATH = Path(__file__).parent.joinpath("test_images").joinpath("exam2.png")
+IMAGE_PATH = Path(__file__).parent.joinpath("test_images").joinpath("exam3.png")
 OUTPUT_DIR = Path(__file__).parent.joinpath("results")
 OUTPUT_DIR.mkdir(exist_ok=True)
 

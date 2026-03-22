@@ -13,9 +13,11 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::CorsLayer;
 
-use crate::ocr::{
-    AbortSignal, OcrError, OcrRequest, OcrService, ServiceStateKind, StopReason,
-};
+use glm_ocr_rs::abort::AbortSignal;
+
+use crate::error::{OcrError, ServiceStateKind};
+use crate::request::{OcrRequest, StopReason};
+use crate::service::OcrService;
 
 /// Shared application state.
 pub struct AppState {
@@ -96,7 +98,7 @@ async fn ocr_status_handler(State(state): State<Arc<AppState>>) -> impl IntoResp
     }))
 }
 
-/// POST /ocr — full (non-streaming) OCR response.
+/// POST /ocr -- full (non-streaming) OCR response.
 /// If the client disconnects, the AbortOnDrop guard aborts generation.
 async fn ocr_handler(
     State(state): State<Arc<AppState>>,
@@ -138,7 +140,7 @@ async fn ocr_handler(
     Ok(AxumJson(result).into_response())
 }
 
-/// POST /ocr/stream — SSE streaming OCR response.
+/// POST /ocr/stream -- SSE streaming OCR response.
 /// Client disconnect is detected both by:
 /// 1. tx.blocking_send() failure in the callback (sets abort immediately)
 /// 2. AbortOnDrop guard when the spawned task is cleaned up
@@ -166,7 +168,7 @@ async fn ocr_stream_handler(
             if !blocking_send_sse_json(&tx, &event_data) {
                 abort_for_callback.set();
                 log::info!(
-                    "Client disconnected (send failed) — aborting generation for {}",
+                    "Client disconnected (send failed) -- aborting generation for {}",
                     image_desc_for_callback
                 );
             }
@@ -335,7 +337,7 @@ impl AbortOnDrop {
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         if !self.abort.is_set() {
-            log::info!("Client disconnected — aborting generation for {}", self.image_desc);
+            log::info!("Client disconnected -- aborting generation for {}", self.image_desc);
             self.abort.set();
         }
     }

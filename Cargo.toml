@@ -1,0 +1,4 @@
+[workspace]
+members = ["glm-ocr-rs", "server"]
+exclude = ["mlx-rs", "mlx-vlm"]
+resolver = "3"

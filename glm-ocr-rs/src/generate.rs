@@ -3,7 +3,7 @@ use mlx_rs::ops::{self, indexing::IndexOp};
 
 use crate::cache::KVCache;
 use crate::full_model::Model;
-use crate::ocr::abort::AbortSignal;
+use crate::abort::AbortSignal;
 use crate::sampler;
 
 /// Configuration for text generation.

@@ -5,9 +5,11 @@ use anyhow::Context;
 
 use glm_ocr_rs::full_model::Model;
 use glm_ocr_rs::image_processor::ImageProcessor;
-use glm_ocr_rs::ocr::{OcrEngine, OcrService};
-use glm_ocr_rs::server::{build_router, AppState};
+use glm_ocr_rs::engine::OcrEngine;
 use glm_ocr_rs::tokenizer::GlmTokenizer;
+
+use glm_ocr_server::http::{build_router, AppState};
+use glm_ocr_server::service::OcrService;
 
 struct Args {
     model_dir: String,

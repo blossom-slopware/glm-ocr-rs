@@ -8,5 +8,5 @@ pub mod sampler;
 pub mod generate;
 pub mod image_processor;
 pub mod tokenizer;
-pub mod ocr;
-pub mod server;
+pub mod abort;
+pub mod engine;

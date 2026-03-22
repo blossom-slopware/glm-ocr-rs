@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::error::EngineError;
+use glm_ocr_rs::engine::EngineError;
 
 /// How the image is supplied by the caller.
 #[derive(Debug, Clone, Deserialize)]
@@ -37,8 +37,6 @@ pub struct OcrRequest {
 const MAX_TOKENS_LIMIT: usize = 16384;
 
 impl OcrRequest {
-    /// Validate the request and return the effective max_tokens value.
-    /// Returns error if validation fails, otherwise returns the clamped max_tokens.
     pub fn validate(&self) -> Result<usize, EngineError> {
         match &self.image {
             ImageSource::Url { url } if url.trim().is_empty() => {
@@ -85,7 +83,6 @@ impl OcrRequest {
         Ok(effective_max_tokens)
     }
 
-    /// Short description of the image source for logging.
     pub fn image_description(&self) -> String {
         match &self.image {
             ImageSource::Url { url } => {
@@ -100,6 +97,20 @@ impl OcrRequest {
             ImageSource::Bytes(bytes) => format!("<{} bytes>", bytes.len()),
         }
     }
+
+    /// Convert to inference-level input for the engine.
+    pub fn to_inference_input(&self) -> glm_ocr_rs::engine::InferenceInput {
+        let image = match &self.image {
+            ImageSource::Url { url } => glm_ocr_rs::engine::ImageSource::Url(url.clone()),
+            ImageSource::Bytes(bytes) => glm_ocr_rs::engine::ImageSource::Bytes(bytes.clone()),
+        };
+        glm_ocr_rs::engine::InferenceInput {
+            image,
+            prompt: self.prompt.clone(),
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+        }
+    }
 }
 
 /// Why generation stopped.
@@ -111,10 +122,30 @@ pub enum StopReason {
     Aborted,
 }
 
+impl From<glm_ocr_rs::engine::StopReason> for StopReason {
+    fn from(reason: glm_ocr_rs::engine::StopReason) -> Self {
+        match reason {
+            glm_ocr_rs::engine::StopReason::StopToken => Self::StopToken,
+            glm_ocr_rs::engine::StopReason::MaxTokens => Self::MaxTokens,
+            glm_ocr_rs::engine::StopReason::Aborted => Self::Aborted,
+        }
+    }
+}
+
 /// Result of a completed OCR run.
 #[derive(Debug, Clone, Serialize)]
 pub struct OcrRunResult {
     pub text: String,
     pub generated_tokens: usize,
     pub stop_reason: StopReason,
+}
+
+impl From<glm_ocr_rs::engine::InferenceResult> for OcrRunResult {
+    fn from(result: glm_ocr_rs::engine::InferenceResult) -> Self {
+        Self {
+            text: result.text,
+            generated_tokens: result.generated_tokens,
+            stop_reason: result.stop_reason.into(),
+        }
+    }
 }

@@ -1,92 +1,7 @@
 use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum EngineError {
-    #[error("request aborted")]
-    Aborted,
-
-    #[error("invalid request: {message}")]
-    InvalidRequest {
-        code: &'static str,
-        message: &'static str,
-    },
-
-    #[error("failed to load input image")]
-    ImageLoad {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("failed to decode input image")]
-    ImageDecode {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("image preprocessing failed")]
-    Preprocess {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("prompt rendering failed")]
-    PromptRender {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("tokenization failed")]
-    Tokenization {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("stream decode failed")]
-    StreamDecode {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("generation failed")]
-    Generation {
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("state invariant violated: {message}")]
-    StateInvariant {
-        code: &'static str,
-        message: String,
-    },
-
-    #[error("worker panicked: {message}")]
-    WorkerPanic {
-        message: String,
-    },
-}
-
-impl EngineError {
-    pub fn should_fault_service(&self) -> bool {
-        matches!(
-            self,
-            Self::StreamDecode { .. }
-                | Self::Generation { .. }
-                | Self::StateInvariant { .. }
-                | Self::WorkerPanic { .. }
-        )
-    }
-
-    pub fn fault_reason(&self) -> Option<&'static str> {
-        match self {
-            Self::StreamDecode { .. } => Some("stream_decode_failed"),
-            Self::Generation { .. } => Some("generation_failed"),
-            Self::StateInvariant { code, .. } => Some(code),
-            Self::WorkerPanic { .. } => Some("worker_panicked"),
-            _ => None,
-        }
-    }
-}
+use glm_ocr_rs::engine::EngineError;
 
 #[derive(Debug, Error)]
 pub enum OcrError {
@@ -135,8 +50,6 @@ impl OcrError {
         }
     }
 
-    /// Convert an `EngineError` reference to `OcrError` without consuming it.
-    /// Uses the same mapping as `From<EngineError>`.
     pub fn from_engine_error_ref(error: &EngineError) -> Self {
         match error {
             EngineError::Aborted => Self::Aborted,
